@@ -18,9 +18,28 @@ import (
 	"time"
 
 	"github.com/hybridgroup/mjpeg"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
-// ROI represents a Region of Interest
+// Point represents a 2D point
+type Point struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// DrawElement represents a drawable element on the video stream
+type DrawElement struct {
+	Type      string  `json:"type"`      // "rectangle", "polyline", "text"
+	Points    []Point `json:"points"`    // For rectangle: [topLeft, bottomRight], for polyline: multiple points
+	Text      string  `json:"text"`      // For text type
+	Color     string  `json:"color"`     // Hex color, e.g., "#FF0000"
+	Thickness int     `json:"thickness"` // Line thickness in pixels
+	FontSize  int     `json:"fontSize"`  // Font size for text
+}
+
+// ROI represents a Region of Interest (deprecated, kept for backward compatibility)
 type ROI struct {
 	X      int `json:"x"`
 	Y      int `json:"y"`
@@ -30,11 +49,12 @@ type ROI struct {
 
 // Camera represents a single camera configuration
 type Camera struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	RtspUrl string `json:"rtspUrl"`
-	ROI     []ROI  `json:"roi"`
-	Enabled bool   `json:"enabled"`
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	RtspUrl      string        `json:"rtspUrl"`
+	ROI          []ROI         `json:"roi"`          // Deprecated, kept for backward compatibility
+	DrawElements []DrawElement `json:"drawElements"` // New drawing system
+	Enabled      bool          `json:"enabled"`
 }
 
 // Config represents the application configuration
@@ -147,7 +167,7 @@ func (sm *StreamManager) GetConfig() *Config {
 	return sm.config
 }
 
-// UpdateCameraROI updates the ROI for a camera
+// UpdateCameraROI updates the ROI for a camera (deprecated, use UpdateCameraDrawElements)
 func (sm *StreamManager) UpdateCameraROI(id string, roi []ROI) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -155,6 +175,20 @@ func (sm *StreamManager) UpdateCameraROI(id string, roi []ROI) error {
 	for i := range sm.config.Cameras {
 		if sm.config.Cameras[i].ID == id {
 			sm.config.Cameras[i].ROI = roi
+			return nil
+		}
+	}
+	return fmt.Errorf("camera not found: %s", id)
+}
+
+// UpdateCameraDrawElements updates the DrawElements for a camera
+func (sm *StreamManager) UpdateCameraDrawElements(id string, drawElements []DrawElement) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	for i := range sm.config.Cameras {
+		if sm.config.Cameras[i].ID == id {
+			sm.config.Cameras[i].DrawElements = drawElements
 			return nil
 		}
 	}
@@ -371,9 +405,14 @@ func (sm *StreamManager) processCamera(camera *Camera, stream *mjpeg.Stream) {
 				draw.Draw(rgba, rgba.Bounds(), msg.Frame, msg.Frame.Bounds().Min, draw.Src)
 			}
 
-			// Draw ROI rectangles if configured
+			// Draw ROI rectangles if configured (backward compatibility)
 			if len(camera.ROI) > 0 {
 				sm.drawROI(rgba, camera.ROI)
+			}
+
+			// Draw new drawing elements
+			if len(camera.DrawElements) > 0 {
+				sm.drawElements(rgba, camera.DrawElements)
 			}
 
 			// Encode to JPEG and update stream
@@ -478,6 +517,200 @@ func (sm *StreamManager) drawRect(img *image.RGBA, x, y, width, height int) {
 	draw.Draw(img, image.Rect(x, y, x+2, y+height), red, image.Point{}, draw.Over)
 	// Draw right line
 	draw.Draw(img, image.Rect(x+width-2, y, x+width, y+height), red, image.Point{}, draw.Over)
+}
+
+// drawElements draws all drawing elements on the image
+func (sm *StreamManager) drawElements(img *image.RGBA, elements []DrawElement) {
+	for _, elem := range elements {
+		switch elem.Type {
+		case "rectangle":
+			sm.drawRectangleElement(img, elem)
+		case "polyline":
+			sm.drawPolylineElement(img, elem)
+		case "text":
+			sm.drawTextElement(img, elem)
+		}
+	}
+}
+
+// parseColor converts hex color string to color.RGBA
+func parseColor(hexColor string) color.RGBA {
+	// Default to red if parsing fails
+	defaultColor := color.RGBA{255, 0, 0, 255}
+
+	if len(hexColor) == 0 {
+		return defaultColor
+	}
+
+	// Remove # if present
+	if hexColor[0] == '#' {
+		hexColor = hexColor[1:]
+	}
+
+	if len(hexColor) != 6 {
+		return defaultColor
+	}
+
+	// Parse RGB values
+	var r, g, b uint8
+	if _, err := fmt.Sscanf(hexColor, "%02x%02x%02x", &r, &g, &b); err != nil {
+		return defaultColor
+	}
+
+	return color.RGBA{r, g, b, 255}
+}
+
+// drawRectangleElement draws a rectangle element
+func (sm *StreamManager) drawRectangleElement(img *image.RGBA, elem DrawElement) {
+	if len(elem.Points) < 2 {
+		return
+	}
+
+	x1, y1 := elem.Points[0].X, elem.Points[0].Y
+	x2, y2 := elem.Points[1].X, elem.Points[1].Y
+
+	// Ensure x1 < x2 and y1 < y2
+	if x1 > x2 {
+		x1, x2 = x2, x1
+	}
+	if y1 > y2 {
+		y1, y2 = y2, y1
+	}
+
+	col := parseColor(elem.Color)
+	thickness := elem.Thickness
+	if thickness <= 0 {
+		thickness = 2
+	}
+
+	colorUniform := image.NewUniform(col)
+
+	// Draw top line
+	draw.Draw(img, image.Rect(x1, y1, x2, y1+thickness), colorUniform, image.Point{}, draw.Over)
+	// Draw bottom line
+	draw.Draw(img, image.Rect(x1, y2-thickness, x2, y2), colorUniform, image.Point{}, draw.Over)
+	// Draw left line
+	draw.Draw(img, image.Rect(x1, y1, x1+thickness, y2), colorUniform, image.Point{}, draw.Over)
+	// Draw right line
+	draw.Draw(img, image.Rect(x2-thickness, y1, x2, y2), colorUniform, image.Point{}, draw.Over)
+}
+
+// drawPolylineElement draws a polyline element
+func (sm *StreamManager) drawPolylineElement(img *image.RGBA, elem DrawElement) {
+	if len(elem.Points) < 2 {
+		return
+	}
+
+	col := parseColor(elem.Color)
+	thickness := elem.Thickness
+	if thickness <= 0 {
+		thickness = 2
+	}
+
+	// Draw lines between consecutive points
+	for i := 0; i < len(elem.Points)-1; i++ {
+		sm.drawLine(img, elem.Points[i].X, elem.Points[i].Y,
+			elem.Points[i+1].X, elem.Points[i+1].Y, col, thickness)
+	}
+}
+
+// drawLine draws a line between two points using Bresenham's algorithm
+func (sm *StreamManager) drawLine(img *image.RGBA, x0, y0, x1, y1 int, col color.RGBA, thickness int) {
+	dx := abs(x1 - x0)
+	dy := abs(y1 - y0)
+	sx := -1
+	if x0 < x1 {
+		sx = 1
+	}
+	sy := -1
+	if y0 < y1 {
+		sy = 1
+	}
+	err := dx - dy
+
+	for {
+		// Draw a thick point
+		for tx := -thickness / 2; tx <= thickness/2; tx++ {
+			for ty := -thickness / 2; ty <= thickness/2; ty++ {
+				px, py := x0+tx, y0+ty
+				if px >= 0 && px < img.Bounds().Dx() && py >= 0 && py < img.Bounds().Dy() {
+					img.Set(px, py, col)
+				}
+			}
+		}
+
+		if x0 == x1 && y0 == y1 {
+			break
+		}
+
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			x0 += sx
+		}
+		if e2 < dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
+// abs returns the absolute value of an integer
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// drawTextElement draws a text element
+func (sm *StreamManager) drawTextElement(img *image.RGBA, elem DrawElement) {
+	if len(elem.Points) < 1 || elem.Text == "" {
+		return
+	}
+
+	x, y := elem.Points[0].X, elem.Points[0].Y
+	col := parseColor(elem.Color)
+
+	// Get font size, default to 13
+	fontSize := elem.FontSize
+	if fontSize <= 0 {
+		fontSize = 13
+	}
+
+	// Use basicfont for simple text rendering
+	// basicfont.Face7x13 is 7 pixels wide and 13 pixels tall
+	// We'll scale it by drawing each character as a scaled rectangle
+	point := fixed.Point26_6{
+		X: fixed.Int26_6(x * 64),
+		Y: fixed.Int26_6(y * 64),
+	}
+
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(col),
+		Face: basicfont.Face7x13,
+		Dot:  point,
+	}
+
+	// If fontSize is different from 13, we need to scale
+	// For simplicity, we'll just use the basic font and adjust spacing
+	// A better approach would be to load TTF fonts
+	if fontSize != 13 {
+		// Simple scaling: draw text multiple times with offset for thickness
+		scale := float64(fontSize) / 13.0
+		for dx := 0; dx < int(scale); dx++ {
+			for dy := 0; dy < int(scale); dy++ {
+				d.Dot = fixed.Point26_6{
+					X: fixed.Int26_6((x + dx) * 64),
+					Y: fixed.Int26_6((y + dy) * 64),
+				}
+				d.DrawString(elem.Text)
+			}
+		}
+	} else {
+		d.DrawString(elem.Text)
+	}
 }
 
 // ServeHTTP handles HTTP requests for streams

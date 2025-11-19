@@ -1,0 +1,102 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>摄像头配置 - 绘制管理</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #1a1a1a; color: #fff; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 20px; color: #4CAF50; }
+        .nav { text-align: center; margin-bottom: 20px; }
+        .nav a { color: #4CAF50; text-decoration: none; margin: 0 15px; padding: 8px 16px; border: 1px solid #4CAF50; border-radius: 4px; transition: all 0.3s; }
+        .nav a:hover { background: #4CAF50; color: #fff; }
+        .camera-info { background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #444; }
+        .camera-header { display: flex; justify-content: space-between; align-items: center; }
+        .camera-name { font-size: 24px; font-weight: bold; color: #4CAF50; }
+        .camera-id { font-size: 14px; color: #888; margin-top: 5px; }
+        .status { padding: 5px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+        .status.online { background: #4CAF50; color: white; }
+        .status.offline { background: #f44336; color: white; }
+        .video-section { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #444; }
+        .video-container { position: relative; width: 100%; background: #000; border-radius: 4px; overflow: hidden; cursor: crosshair; margin-bottom: 15px; }
+        .video-stream { width: 100%; display: block; }
+        .roi-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .draw-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .draw-toolbar { display: flex; gap: 10px; align-items: center; padding: 15px; background: #333; border-radius: 4px; flex-wrap: wrap; margin-bottom: 15px; }
+        .draw-toolbar label { font-size: 12px; color: #aaa; }
+        .draw-toolbar select, .draw-toolbar input[type="color"], .draw-toolbar input[type="number"], .draw-toolbar input[type="text"] { padding: 5px; background: #444; border: 1px solid #555; border-radius: 3px; color: #fff; font-size: 12px; }
+        .draw-toolbar input[type="color"] { width: 40px; height: 30px; padding: 2px; cursor: pointer; }
+        .draw-toolbar input[type="number"] { width: 60px; }
+        .draw-toolbar input[type="text"] { width: 150px; }
+        .tool-group { display: flex; gap: 5px; align-items: center; }
+        button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; transition: all 0.3s; }
+        .btn-primary { background: #4CAF50; color: white; }
+        .btn-primary:hover { background: #45a049; }
+        .btn-danger { background: #f44336; color: white; }
+        .btn-danger:hover { background: #da190b; }
+        .btn-secondary { background: #555; color: white; }
+        .btn-secondary:hover { background: #666; }
+        .element-list { margin-top: 15px; max-height: 300px; overflow-y: auto; }
+        .element-item { background: #333; padding: 8px; margin: 5px 0; border-radius: 3px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+        .element-item .element-info { flex: 1; }
+        .element-item .element-type { display: inline-block; padding: 2px 6px; background: #4CAF50; border-radius: 3px; margin-right: 8px; font-size: 10px; }
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1> 摄像头绘制配置</h1>
+        <div class="nav">
+            <a href="/config"> 返回列表</a>
+            <a href="/monitor">实时监控</a>
+        </div>
+        <div class="camera-info" id="cameraInfo"></div>
+        <div class="video-section">
+            <div class="video-container" id="videoContainer">
+                <img class="video-stream" id="videoStream" alt="视频流" crossorigin="anonymous">
+                <canvas class="roi-canvas" id="roiCanvas"></canvas>
+                <canvas class="draw-canvas" id="drawCanvas"></canvas>
+            </div>
+            <div class="draw-toolbar">
+                <div class="tool-group">
+                    <label>工具:</label>
+                    <select id="toolSelect">
+                        <option value="rectangle">矩形</option>
+                        <option value="polyline">多折线</option>
+                        <option value="text">文字</option>
+                    </select>
+                </div>
+                <div class="tool-group">
+                    <label>颜色:</label>
+                    <input type="color" id="colorPicker" value="#FF0000">
+                </div>
+                <div class="tool-group">
+                    <label>粗细:</label>
+                    <input type="number" id="thicknessInput" value="2" min="1" max="10">
+                </div>
+                <div class="tool-group" id="textInputGroup" style="display:none;">
+                    <label>文字:</label>
+                    <input type="text" id="textInput" placeholder="输入文字">
+                </div>
+                <div class="tool-group" id="fontSizeGroup" style="display:none;">
+                    <label>字号:</label>
+                    <select id="fontSizeSelect">
+                        <option value="10">小 (10)</option>
+                        <option value="13" selected>中 (13)</option>
+                        <option value="16">大 (16)</option>
+                        <option value="20">特大 (20)</option>
+                        <option value="24">超大 (24)</option>
+                    </select>
+                </div>
+                <button class="btn-primary" onclick="startDrawing()">开始绘制</button>
+                <button class="btn-danger" onclick="clearElements()">清除全部</button>
+                <button class="btn-secondary" onclick="saveElements()">保存</button>
+            </div>
+            <div class="element-list" id="elementList"></div>
+        </div>
+    </div>
+    <script src="/static/camera-config.js"></script>
+</body>
+</html>

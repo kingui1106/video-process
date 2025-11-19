@@ -1,6 +1,8 @@
 module github.com/8ff/firescrew
 
-go 1.21.0
+go 1.24.0
+
+toolchain go1.24.10
 
 require (
 	github.com/8ff/prettyTimer v0.0.0-20230830184900-c96793faf613
@@ -22,7 +24,7 @@ require (
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.10 // indirect
 	github.com/pion/sdp/v3 v3.0.6 // indirect
-	golang.org/x/image v0.11.0 // indirect
+	golang.org/x/image v0.33.0 // indirect
 	golang.org/x/net v0.14.0 // indirect
 	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.11.0 // indirect

@@ -18,6 +18,7 @@ func (sm *StreamManager) SetupRoutes(mux *http.ServeMux) {
 	// Serve static files
 	mux.HandleFunc("/", sm.handleIndex)
 	mux.HandleFunc("/config", sm.handleConfig)
+	mux.HandleFunc("/camera-config", sm.handleCameraConfig)
 	mux.HandleFunc("/monitor", sm.handleMonitor)
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 
@@ -44,6 +45,17 @@ func (sm *StreamManager) handleConfig(w http.ResponseWriter, r *http.Request) {
 	data, err := staticFiles.ReadFile("static/config.html")
 	if err != nil {
 		http.Error(w, "Failed to load config page", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+// handleCameraConfig serves the camera configuration page
+func (sm *StreamManager) handleCameraConfig(w http.ResponseWriter, r *http.Request) {
+	data, err := staticFiles.ReadFile("static/camera-config.html")
+	if err != nil {
+		http.Error(w, "Failed to load camera config page", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -143,7 +155,7 @@ func (sm *StreamManager) handleCameraAPI(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleUpdateROI updates ROI for a camera
+// handleUpdateROI updates DrawElements for a camera (roi is deprecated)
 func (sm *StreamManager) handleUpdateROI(w http.ResponseWriter, r *http.Request, cameraID string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -158,7 +170,7 @@ func (sm *StreamManager) handleUpdateROI(w http.ResponseWriter, r *http.Request,
 	defer r.Body.Close()
 
 	var data struct {
-		ROI []ROI `json:"roi"`
+		DrawElements []DrawElement `json:"drawElements"`
 	}
 
 	if err := json.Unmarshal(body, &data); err != nil {
@@ -166,7 +178,8 @@ func (sm *StreamManager) handleUpdateROI(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	if err := sm.UpdateCameraROI(cameraID, data.ROI); err != nil {
+	// Update DrawElements
+	if err := sm.UpdateCameraDrawElements(cameraID, data.DrawElements); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}

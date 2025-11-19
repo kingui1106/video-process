@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"net/http"
 
@@ -9,11 +8,11 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.json", "Path to configuration file")
-	flag.Parse()
+	// Fixed config file path - always use config.json in current directory
+	configPath := "config.json"
 
 	// Create stream manager
-	sm, err := streamManager.NewStreamManager(*configPath)
+	sm, err := streamManager.NewStreamManager(configPath)
 	if err != nil {
 		log.Fatalf("Failed to create stream manager: %v", err)
 	}

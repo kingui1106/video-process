@@ -10,14 +10,14 @@ if %errorlevel% neq 0 (
 
 echo Starting server...
 echo.
-echo Web Interface: http://localhost:8080/config
-echo Stream URL: http://localhost:8080/stream/camera1
+echo Using config file: config.json
+echo Web Interface: http://localhost:8081/config
 echo.
 
-start "Firescrew MultiStream Server" firescrew_multistream.exe -config config_multistream.json
+start "Firescrew MultiStream Server" firescrew_multistream.exe
 
 timeout /t 2 /nobreak >nul
-start http://localhost:8080/config
+start http://localhost:8081/config
 
 echo.
 echo Server is running in a separate window
