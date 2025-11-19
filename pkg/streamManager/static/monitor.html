@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频流监控</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #4CAF50;
+        }
+        .nav {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .nav a {
+            color: #4CAF50;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 8px 16px;
+            border: 1px solid #4CAF50;
+            border-radius: 4px;
+            transition: all 0.3s;
+        }
+        .nav a:hover {
+            background: #4CAF50;
+            color: #fff;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            border: 2px solid #444;
+        }
+        .stat-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #4CAF50;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #aaa;
+        }
+        .camera-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 20px;
+        }
+        .camera-card {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 15px;
+            border: 2px solid #444;
+        }
+        .camera-card.streaming {
+            border-color: #4CAF50;
+        }
+        .camera-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .camera-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .camera-id {
+            font-size: 12px;
+            color: #888;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-badge.streaming {
+            background: #4CAF50;
+            color: white;
+        }
+        .status-badge.offline {
+            background: #666;
+            color: white;
+        }
+        .video-preview {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+        .video-stream {
+            width: 100%;
+            display: block;
+        }
+        .no-stream {
+            padding: 60px 20px;
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+        }
+        .camera-info {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            font-size: 13px;
+        }
+        .info-item {
+            background: #333;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .info-label {
+            color: #888;
+            margin-bottom: 5px;
+        }
+        .info-value {
+            color: #fff;
+            font-weight: bold;
+        }
+        .info-value.viewers {
+            color: #4CAF50;
+            font-size: 18px;
+        }
+        .controls {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #45a049;
+        }
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #da190b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 视频流监控中心</h1>
+
+        <div class="nav">
+            <a href="/config">配置管理</a>
+            <a href="/monitor">实时监控</a>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="totalCameras">0</div>
+                <div class="stat-label">总摄像头数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="streamingCameras">0</div>
+                <div class="stat-label">正在推流</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalViewers">0</div>
+                <div class="stat-label">总观看人数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="enabledCameras">0</div>
+                <div class="stat-label">已启用摄像头</div>
+            </div>
+        </div>
+
+        <div class="camera-grid" id="cameraGrid"></div>
+    </div>
+
+    <script src="/static/monitor.js"></script>
+</body>
+</html>
+

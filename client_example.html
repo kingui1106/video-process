@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频流客户端示例</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .config-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .config-panel label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        .config-panel input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .config-panel button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        .config-panel button:hover {
+            background: #5568d3;
+        }
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .video-card {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s;
+        }
+        .video-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        .video-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            font-weight: bold;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            background: #000;
+        }
+        .video-stream {
+            width: 100%;
+            display: block;
+        }
+        .video-footer {
+            padding: 15px;
+            background: #f5f5f5;
+        }
+        .stream-url {
+            font-size: 12px;
+            color: #666;
+            word-break: break-all;
+            margin-bottom: 10px;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+        }
+        .actions button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+        .btn-fullscreen {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-fullscreen:hover {
+            background: #45a049;
+        }
+        .btn-copy {
+            background: #2196F3;
+            color: white;
+        }
+        .btn-copy:hover {
+            background: #0b7dda;
+        }
+        .status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        .status.loading {
+            background: #ff9800;
+            color: white;
+        }
+        .status.online {
+            background: #4CAF50;
+            color: white;
+        }
+        .status.error {
+            background: #f44336;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 多路视频流客户端</h1>
+        
+        <div class="config-panel">
+            <label for="serverUrl">服务器地址:</label>
+            <input type="text" id="serverUrl" value="http://192.168.102.29:8080" placeholder="http://服务器IP:端口">
+            <button onclick="loadStreams()">连接服务器</button>
+        </div>
+
+        <div class="video-grid" id="videoGrid"></div>
+    </div>
+
+    <script>
+        let serverUrl = '';
+
+        // 页面加载时自动连接
+        window.addEventListener('DOMContentLoaded', () => {
+            const urlInput = document.getElementById('serverUrl');
+            serverUrl = urlInput.value;
+            loadStreams();
+        });
+
+        // 加载视频流列表
+        async function loadStreams() {
+            const urlInput = document.getElementById('serverUrl');
+            serverUrl = urlInput.value.replace(/\/$/, ''); // 移除末尾的斜杠
+
+            const grid = document.getElementById('videoGrid');
+            grid.innerHTML = '<div style="color: white; text-align: center; padding: 40px;">正在加载...</div>';
+
+            try {
+                const response = await fetch(`${serverUrl}/api/cameras`);
+                const cameras = await response.json();
+
+                if (cameras.length === 0) {
+                    grid.innerHTML = '<div style="color: white; text-align: center; padding: 40px;">没有可用的摄像头</div>';
+                    return;
+                }
+
+                grid.innerHTML = '';
+                cameras.forEach(camera => {
+                    if (camera.enabled) {
+                        const card = createVideoCard(camera);
+                        grid.appendChild(card);
+                    }
+                });
+            } catch (error) {
+                console.error('Failed to load cameras:', error);
+                grid.innerHTML = `<div style="color: white; text-align: center; padding: 40px;">
+                    ❌ 连接失败: ${error.message}<br><br>
+                    请检查服务器地址是否正确
+                </div>`;
+            }
+        }
+
+        // 创建视频卡片
+        function createVideoCard(camera) {
+            const card = document.createElement('div');
+            card.className = 'video-card';
+
+            const streamUrl = `${serverUrl}/stream/${camera.id}`;
+
+            card.innerHTML = `
+                <div class="video-header">
+                    ${camera.name}
+                    <span class="status loading" id="status-${camera.id}">加载中...</span>
+                </div>
+                <div class="video-container">
+                    <img class="video-stream" 
+                         id="stream-${camera.id}"
+                         src="${streamUrl}" 
+                         alt="${camera.name}"
+                         onerror="handleStreamError('${camera.id}')"
+                         onload="handleStreamLoad('${camera.id}')">
+                </div>
+                <div class="video-footer">
+                    <div class="stream-url">流地址: ${streamUrl}</div>
+                    <div class="actions">
+                        <button class="btn-fullscreen" onclick="openFullscreen('${camera.id}')">全屏</button>
+                        <button class="btn-copy" onclick="copyUrl('${streamUrl}')">复制链接</button>
+                    </div>
+                </div>
+            `;
+
+            return card;
+        }
+
+        // 处理流加载成功
+        function handleStreamLoad(cameraId) {
+            const status = document.getElementById(`status-${cameraId}`);
+            if (status) {
+                status.textContent = '在线';
+                status.className = 'status online';
+            }
+        }
+
+        // 处理流加载错误
+        function handleStreamError(cameraId) {
+            const status = document.getElementById(`status-${cameraId}`);
+            if (status) {
+                status.textContent = '离线';
+                status.className = 'status error';
+            }
+        }
+
+        // 全屏显示
+        function openFullscreen(cameraId) {
+            const img = document.getElementById(`stream-${cameraId}`);
+            if (img.requestFullscreen) {
+                img.requestFullscreen();
+            } else if (img.webkitRequestFullscreen) {
+                img.webkitRequestFullscreen();
+            } else if (img.msRequestFullscreen) {
+                img.msRequestFullscreen();
+            }
+        }
+
+        // 复制URL
+        function copyUrl(url) {
+            navigator.clipboard.writeText(url).then(() => {
+                alert('链接已复制到剪贴板！');
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('复制失败，请手动复制');
+            });
+        }
+    </script>
+</body>
+</html>
+
