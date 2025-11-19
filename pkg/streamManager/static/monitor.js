@@ -111,10 +111,6 @@ function createCameraCard(camera) {
             </div>
         </div>
         <div class="controls">
-            ${camera.isStreaming ? 
-                `<button class="btn-danger" onclick="stopStream('${camera.id}')">停止推流</button>` :
-                `<button class="btn-primary" onclick="startStream('${camera.id}')">开始推流</button>`
-            }
             <button class="btn-primary" onclick="window.open('/stream/${camera.id}', '_blank')">查看流</button>
         </div>
     `;
@@ -149,10 +145,6 @@ function updateCameraCard(card, camera) {
     // Update controls
     const controls = card.querySelector('.controls');
     controls.innerHTML = `
-        ${camera.isStreaming ?
-            `<button class="btn-danger" onclick="stopStream('${camera.id}')">停止推流</button>` :
-            `<button class="btn-primary" onclick="startStream('${camera.id}')">开始推流</button>`
-        }
         <button class="btn-primary" onclick="window.open('/stream/${camera.id}', '_blank')">查看流</button>
     `;
 }
@@ -175,48 +167,6 @@ function formatTime(timeStr) {
         return `${Math.floor(diff / 3600)}小时前`;
     } else {
         return date.toLocaleString('zh-CN');
-    }
-}
-
-// Start stream
-async function startStream(cameraId) {
-    try {
-        const response = await fetch(`/api/cameras/${cameraId}/start`, {
-            method: 'POST'
-        });
-
-        if (response.ok) {
-            console.log(`Started stream for camera: ${cameraId}`);
-            // Refresh immediately
-            loadCameras();
-        } else {
-            const error = await response.text();
-            alert(`启动失败: ${error}`);
-        }
-    } catch (error) {
-        console.error('Failed to start stream:', error);
-        alert('启动失败: ' + error.message);
-    }
-}
-
-// Stop stream
-async function stopStream(cameraId) {
-    try {
-        const response = await fetch(`/api/cameras/${cameraId}/stop`, {
-            method: 'POST'
-        });
-
-        if (response.ok) {
-            console.log(`Stopped stream for camera: ${cameraId}`);
-            // Refresh immediately
-            loadCameras();
-        } else {
-            const error = await response.text();
-            alert(`停止失败: ${error}`);
-        }
-    } catch (error) {
-        console.error('Failed to stop stream:', error);
-        alert('停止失败: ' + error.message);
     }
 }
 

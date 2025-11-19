@@ -250,23 +250,56 @@ func (sm *StreamManager) AddCamera(camera Camera) error {
 	}
 
 	sm.config.Cameras = append(sm.config.Cameras, camera)
+
+	// Auto-start stream if camera is enabled
+	if camera.Enabled {
+		go func() {
+			if err := sm.StartStream(camera.ID); err != nil {
+				log.Printf("Failed to auto-start stream for camera %s: %v", camera.ID, err)
+			}
+		}()
+	}
+
 	return nil
 }
 
 // UpdateCamera updates an existing camera
 func (sm *StreamManager) UpdateCamera(id string, camera Camera) error {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+	oldCamera := Camera{}
+	found := false
 	for i := range sm.config.Cameras {
 		if sm.config.Cameras[i].ID == id {
+			oldCamera = sm.config.Cameras[i]
+			found = true
 			// Keep the same ID
 			camera.ID = id
 			sm.config.Cameras[i] = camera
-			return nil
+			break
 		}
 	}
-	return fmt.Errorf("camera not found: %s", id)
+	sm.mu.Unlock()
+
+	if !found {
+		return fmt.Errorf("camera not found: %s", id)
+	}
+
+	// Handle stream state changes based on enabled status
+	if oldCamera.Enabled && !camera.Enabled {
+		// Camera was enabled, now disabled - stop stream
+		sm.StopStream(id)
+		log.Printf("Auto-stopped stream for disabled camera: %s", id)
+	} else if !oldCamera.Enabled && camera.Enabled {
+		// Camera was disabled, now enabled - start stream
+		go func() {
+			if err := sm.StartStream(id); err != nil {
+				log.Printf("Failed to auto-start stream for camera %s: %v", id, err)
+			}
+		}()
+		log.Printf("Auto-starting stream for enabled camera: %s", id)
+	}
+
+	return nil
 }
 
 // DeleteCamera removes a camera from the configuration

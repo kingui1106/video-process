@@ -146,10 +146,6 @@ func (sm *StreamManager) handleCameraAPI(w http.ResponseWriter, r *http.Request)
 	switch action {
 	case "roi":
 		sm.handleUpdateROI(w, r, cameraID)
-	case "start":
-		sm.handleStartStream(w, r, cameraID)
-	case "stop":
-		sm.handleStopStream(w, r, cameraID)
 	default:
 		http.Error(w, "Unknown action", http.StatusBadRequest)
 	}
@@ -232,38 +228,6 @@ func (sm *StreamManager) handleDeleteCamera(w http.ResponseWriter, r *http.Reque
 	// Save config to file
 	if err := sm.SaveConfig(""); err != nil {
 		log.Printf("Warning: Failed to save config: %v", err)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
-}
-
-// handleStartStream starts a camera stream
-func (sm *StreamManager) handleStartStream(w http.ResponseWriter, r *http.Request, cameraID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if err := sm.StartStream(cameraID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
-}
-
-// handleStopStream stops a camera stream
-func (sm *StreamManager) handleStopStream(w http.ResponseWriter, r *http.Request, cameraID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if err := sm.StopStream(cameraID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
