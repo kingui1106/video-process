@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/hybridgroup/mjpeg"
@@ -502,8 +503,9 @@ func (sm *StreamManager) processCamera(camera *Camera, stream *mjpeg.Stream) {
 
 // FrameMsg represents a frame message
 type FrameMsg struct {
-	Frame image.Image
-	Error string
+	Frame    image.Image
+	Error    string
+	ExitCode int
 }
 
 // processRTSPFeed processes RTSP feed using ffmpeg
@@ -594,7 +596,20 @@ func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- Frame
 		}
 	}
 
-	cmd.Wait()
+	err = cmd.Wait()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				exitCode = status.ExitStatus()
+			}
+		}
+		msgChannel <- FrameMsg{Error: "FFmpeg exited with error: " + err.Error(), ExitCode: exitCode}
+	}
+
+	if stderrBuffer.Len() > 0 {
+		msgChannel <- FrameMsg{Error: "FFmpeg STDERR: " + stderrBuffer.String()}
+	}
 }
 
 // drawROI draws ROI rectangles on the image
