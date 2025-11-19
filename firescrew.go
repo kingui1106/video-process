@@ -400,7 +400,7 @@ func processRTSPFeed(rtspURL string, msgChannel chan<- FrameMsg) {
 		"-analyzeduration", "1000000",
 		"-probesize", "1000000",
 		"-vf", `select=not(mod(n\,5))`,
-		"-fps_mode", "vfr",
+		"-vsync", "vfr",
 		"-c:v", "png",
 		"-f", "image2pipe",
 		"-",
