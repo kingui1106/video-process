@@ -27,6 +27,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o firescrew_multistream \
     ./firescrew_multistream.go
 
+# FFmpeg stage - 使用支持CUDA的FFmpeg镜像
+FROM jrottenberg/ffmpeg:7.1-nvidia2404 AS ffmpeg
+
 # Final stage - 使用NVIDIA CUDA基础镜像以支持GPU加速 (适配驱动570.195.03)
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
@@ -64,15 +67,31 @@ RUN apt-get update && apt-get install -y --fix-missing \
     libgl1-mesa-glx \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装FFmpeg和多媒体依赖
+# 从FFmpeg镜像复制支持CUDA的FFmpeg及其依赖
+COPY --from=ffmpeg /usr/local /usr/local
+
+# 安装FFmpeg运行时依赖
 RUN apt-get update && apt-get install -y --fix-missing \
     libgstreamer1.0-0 \
     libgstreamer-plugins-base1.0-0 \
-    ffmpeg \
+    libva2 \
+    libva-drm2 \
+    libvdpau1 \
+    libx264-163 \
+    libx265-199 \
     && rm -rf /var/lib/apt/lists/*
 
+# 更新库缓存
+RUN ldconfig
+
 # Verify FFmpeg CUDA support
-RUN ffmpeg -hwaccels 2>&1 | grep -q cuda || echo "Warning: FFmpeg may not have CUDA support"
+RUN echo "=== FFmpeg version ===" && \
+    ffmpeg -version && \
+    echo "" && \
+    echo "=== Hardware accelerators ===" && \
+    ffmpeg -hwaccels 2>&1 && \
+    echo "" && \
+    (ffmpeg -hwaccels 2>&1 | grep -q cuda && echo "✓ FFmpeg CUDA support verified successfully!" || echo "⚠ Warning: FFmpeg CUDA support not found - will fallback to CPU mode")
 
 # Create app directory
 WORKDIR /app
