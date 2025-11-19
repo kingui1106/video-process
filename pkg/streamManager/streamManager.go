@@ -114,14 +114,14 @@ func NewStreamManager(configPath string) (*StreamManager, error) {
 
 // checkGPUAvailability checks if NVIDIA GPU is available for hardware acceleration
 func (sm *StreamManager) checkGPUAvailability() bool {
-	// Check if nvidia-smi is available
+	// Check if nvidia-smi is available (optional check, not critical)
 	cmd := exec.Command("nvidia-smi", "-L")
 	if err := cmd.Run(); err != nil {
-		log.Printf("nvidia-smi not found or failed: %v", err)
-		return false
+		log.Printf("nvidia-smi not found or failed: %v (continuing to check FFmpeg CUDA support)", err)
+		// Don't return false here - nvidia-smi might not be available but CUDA runtime could still work
 	}
 
-	// Check if ffmpeg supports CUDA
+	// Check if ffmpeg supports CUDA (this is the critical check)
 	cmd = exec.Command("ffmpeg", "-hwaccels")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -131,6 +131,7 @@ func (sm *StreamManager) checkGPUAvailability() bool {
 
 	// Check if "cuda" is in the list of hardware accelerators
 	if bytes.Contains(output, []byte("cuda")) {
+		log.Printf("✓ NVIDIA GPU hardware acceleration enabled (FFmpeg supports CUDA)")
 		return true
 	}
 
