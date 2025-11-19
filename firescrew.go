@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"embed"
@@ -10,12 +9,10 @@ import (
 	"runtime"
 
 	_ "embed"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
 	"image/color/palette"
 	"image/draw"
 	"image/gif"
@@ -23,14 +20,10 @@ import (
 	"image/png"
 	"io"
 	"log"
-	"math"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,7 +36,6 @@ import (
 	"github.com/goki/freetype"
 	"github.com/goki/freetype/truetype"
 
-	ob "github.com/8ff/firescrew/pkg/objectPredict"
 	"github.com/8ff/prettyTimer"
 	"github.com/hybridgroup/mjpeg"
 )
@@ -56,48 +48,18 @@ var gifSlice []image.RGBA
 //go:embed assets/*
 var assetsFs embed.FS
 
-var everyNthFrame = 1         // Process every Nth frame, 1 = every frame
-var interenceAvgInterval = 10 // Frames to average inference time over
-
 var stream *mjpeg.Stream
 
-type Prediction struct {
-	Object     int       `json:"object"`
-	ClassName  string    `json:"class_name"`
-	Box        []float32 `json:"box"`
-	Top        int       `json:"top"`
-	Bottom     int       `json:"bottom"`
-	Left       int       `json:"left"`
-	Right      int       `json:"right"`
-	Confidence float32   `json:"confidence"`
-	Took       float64   `json:"took"`
-}
-
 type Config struct {
-	CameraName                    string            `json:"cameraName"`
-	PrintDebug                    bool              `json:"printDebug"`
-	DeviceUrl                     string            `json:"deviceUrl"`
-	LoStreamParamBypass           StreamParams      `json:"loStreamParamBypass"`
-	HiResDeviceUrl                string            `json:"hiResDeviceUrl"`
-	HiStreamParamBypass           StreamParams      `json:"hiStreamParamBypass"`
-	PixelMotionAreaThreshold      float64           `json:"pixelMotionAreaThreshold"`
-	ObjectCenterMovementThreshold float64           `json:"objectCenterMovementThreshold"`
-	ObjectAreaThreshold           float64           `json:"objectAreaThreshold"`
-	StreamDrawIgnoredAreas        bool              `json:"streamDrawIgnoredAreas"`
-	IgnoreAreasClasses            []IgnoreAreaClass `json:"ignoreAreasClasses"`
-	EnableOutputStream            bool              `json:"enableOutputStream"`
-	OutputStreamAddr              string            `json:"outputStreamAddr"`
-	Motion                        struct {
-		OnnxModel                 string   `json:"onnxModel"`
-		OnnxEnableCoreMl          bool     `json:"onnxEnableCoreMl"`
-		EmbeddedObjectScript      string   `json:"EmbeddedObjectScript"`
-		ConfidenceMinThreshold    float64  `json:"confidenceMinThreshold"`
-		LookForClasses            []string `json:"lookForClasses"`
-		NetworkObjectDetectServer string   `json:"networkObjectDetectServer"`
-		EventGap                  int      `json:"eventGap"`
-		PrebufferSeconds          int      `json:"prebufferSeconds"`
-	} `json:"motion"`
-	Video struct {
+	CameraName          string       `json:"cameraName"`
+	PrintDebug          bool         `json:"printDebug"`
+	DeviceUrl           string       `json:"deviceUrl"`
+	LoStreamParamBypass StreamParams `json:"loStreamParamBypass"`
+	HiResDeviceUrl      string       `json:"hiResDeviceUrl"`
+	HiStreamParamBypass StreamParams `json:"hiStreamParamBypass"`
+	EnableOutputStream  bool         `json:"enableOutputStream"`
+	OutputStreamAddr    string       `json:"outputStreamAddr"`
+	Video               struct {
 		HiResPath     string `json:"hiResPath"`
 		RecodeTsToMp4 bool   `json:"recodeTsToMp4"`
 		OnlyRemuxMp4  bool   `json:"onlyRemuxMp4"`
@@ -129,38 +91,17 @@ type StreamParams struct {
 	FPS    float64
 }
 
-type InferenceStats struct {
-	Avg float64
-	Min float64
-	Max float64
-}
-
 // TODO ADD MUTEX LOCK
 type RuntimeConfig struct {
 	MotionTriggeredLast time.Time `json:"motionTriggredLast"`
 	MotionTriggered     bool      `json:"motionTriggered"`
-	// MotionTriggeredChan chan bool `json:"motionTriggeredChan"`
-	// MotionHiRecOn bool `json:"motionHiRecOn"`
-	HiResControlChannel   chan RecordMsg
-	MotionVideo           VideoMetadata
-	MotionMutex           *sync.Mutex
-	TextFont              *truetype.Font
-	LoResStreamParams     StreamParams
-	HiResStreamParams     StreamParams
-	objectPredictConn     net.Conn
-	InferenceTimingBuffer []InferenceStats
-	modelReady            bool
-	ObjectPredictClient   *ob.Client
-	CodecName             string
-}
-
-type IgnoreAreaClass struct {
-	Class       []string `json:"class"`
-	Coordinates string   `json:"coordinates"`
-	Top         int      `json:"top"`
-	Bottom      int      `json:"bottom"`
-	Left        int      `json:"left"`
-	Right       int      `json:"right"`
+	HiResControlChannel chan RecordMsg
+	MotionVideo         VideoMetadata
+	MotionMutex         *sync.Mutex
+	TextFont            *truetype.Font
+	LoResStreamParams   StreamParams
+	HiResStreamParams   StreamParams
+	CodecName           string
 }
 
 type ControlCommand struct {
@@ -168,20 +109,10 @@ type ControlCommand struct {
 	Filename       string
 }
 
-type TrackedObject struct {
-	BBox       image.Rectangle
-	Center     image.Point
-	Area       float64
-	LastMoved  time.Time
-	Class      string
-	Confidence float32
-}
-
 type VideoMetadata struct {
 	ID           string
 	MotionStart  time.Time
 	MotionEnd    time.Time
-	Objects      []TrackedObject
 	RecodedToMp4 bool
 	Snapshots    []string
 	VideoFile    string
@@ -189,26 +120,21 @@ type VideoMetadata struct {
 }
 
 type Event struct {
-	Type                string          `json:"type"`
-	Timestamp           time.Time       `json:"timestamp"`
-	MotionTriggeredLast time.Time       `json:"motionTriggeredLast"`
-	ID                  string          `json:"id"`
-	MotionStart         time.Time       `json:"motionStart"`
-	MotionEnd           time.Time       `json:"motionEnd"`
-	Objects             []TrackedObject `json:"objects"`
-	RecodedToMp4        bool            `json:"recodedToMp4"`
-	Snapshots           []string        `json:"snapshots"`
-	VideoFile           string          `json:"videoFile"`
-	CameraName          string          `json:"cameraName"`
-	MetadataPath        string          `json:"metadataPath"`
-	PredictedObjects    []Prediction    `json:"predictedObjects"`
+	Type                string    `json:"type"`
+	Timestamp           time.Time `json:"timestamp"`
+	MotionTriggeredLast time.Time `json:"motionTriggeredLast"`
+	ID                  string    `json:"id"`
+	MotionStart         time.Time `json:"motionStart"`
+	MotionEnd           time.Time `json:"motionEnd"`
+	RecodedToMp4        bool      `json:"recodedToMp4"`
+	Snapshots           []string  `json:"snapshots"`
+	VideoFile           string    `json:"videoFile"`
+	CameraName          string    `json:"cameraName"`
+	MetadataPath        string    `json:"metadataPath"`
 }
 
-var lastPositions = []TrackedObject{}
 var globalConfig Config
 var runtimeConfig RuntimeConfig
-
-var predictFrameCounter int
 
 type Frame struct {
 	Data [][]byte
@@ -254,46 +180,6 @@ func readConfig(path string) Config {
 		os.Exit(1)
 	}
 
-	// Split the coordinates string into separate integers.
-	for i, ignoreAreaClass := range config.IgnoreAreasClasses {
-		coords := strings.Split(ignoreAreaClass.Coordinates, ",")
-		if len(coords) == 4 {
-			config.IgnoreAreasClasses[i].Top, err = strconv.Atoi(coords[0])
-			if err != nil {
-				Log("error", fmt.Sprintf("Error parsing config file: %v", err))
-				os.Exit(1)
-			}
-			config.IgnoreAreasClasses[i].Bottom, err = strconv.Atoi(coords[1])
-			if err != nil {
-				Log("error", fmt.Sprintf("Error parsing config file: %v", err))
-				os.Exit(1)
-			}
-			config.IgnoreAreasClasses[i].Left, err = strconv.Atoi(coords[2])
-			if err != nil {
-				Log("error", fmt.Sprintf("Error parsing config file: %v", err))
-				os.Exit(1)
-			}
-			config.IgnoreAreasClasses[i].Right, err = strconv.Atoi(coords[3])
-			if err != nil {
-				Log("error", fmt.Sprintf("Error parsing config file: %v", err))
-				os.Exit(1)
-			}
-		} else {
-			Log("error", fmt.Sprintf("Error parsing config file: %v", errors.New("coordinates string must contain 4 comma separated integers")))
-			os.Exit(1)
-		}
-	}
-
-	if config.Motion.EmbeddedObjectScript == "" {
-		Log("error", fmt.Sprintf("Error parsing config file: %v", errors.New("embeddedObjectScript must be set")))
-		os.Exit(1)
-	}
-
-	if config.Motion.EmbeddedObjectScript != "objectDetectServerYolo.py" && config.Motion.EmbeddedObjectScript != "objectDetectServerCoral.py" && config.Motion.EmbeddedObjectScript != "objectDetectServerCoreML.py" {
-		Log("error", fmt.Sprintf("Error parsing config file: %v", errors.New("embeddedObjectScript must be either objectDetectServerYolo.py or objectDetectServerCoral.py")))
-		os.Exit(1)
-	}
-
 	// Print the configuration properties.
 	Log("info", "******************** CONFIG ********************")
 	Log("info", fmt.Sprintf("Print Debug: %t", config.PrintDebug))
@@ -304,22 +190,6 @@ func readConfig(path string) Config {
 	Log("info", fmt.Sprintf("Video HiResPath: %s", config.Video.HiResPath))
 	Log("info", fmt.Sprintf("Video RecodeTsToMp4: %t", config.Video.RecodeTsToMp4))
 	Log("info", fmt.Sprintf("Video OnlyRemuxMp4: %t", config.Video.OnlyRemuxMp4))
-	Log("info", fmt.Sprintf("Motion OnnxModel: %s", config.Motion.OnnxModel))
-	Log("info", fmt.Sprintf("Motion OnnxEnableCoreMl: %t", config.Motion.OnnxEnableCoreMl))
-	Log("info", fmt.Sprintf("Motion Embedded Object Script: %s", config.Motion.EmbeddedObjectScript))
-	Log("info", fmt.Sprintf("Motion Object Min Threshold: %f", config.Motion.ConfidenceMinThreshold))
-	Log("info", fmt.Sprintf("Motion LookForClasses: %v", config.Motion.LookForClasses))
-	Log("info", fmt.Sprintf("Motion Network Object Detect Server: %s", config.Motion.NetworkObjectDetectServer))
-	Log("info", fmt.Sprintf("Motion PrebufferSeconds: %d", config.Motion.PrebufferSeconds))
-	Log("info", fmt.Sprintf("Motion EventGap: %d", config.Motion.EventGap))
-	Log("info", fmt.Sprintf("Pixel Motion Area Threshold: %f", config.PixelMotionAreaThreshold))
-	Log("info", fmt.Sprintf("Object Center Movement Threshold: %f", config.ObjectCenterMovementThreshold))
-	Log("info", fmt.Sprintf("Object Area Threshold: %f", config.ObjectAreaThreshold))
-	Log("info", "Ignore Areas Classes:")
-	for _, ignoreAreaClass := range config.IgnoreAreasClasses {
-		Log("info", fmt.Sprintf("  Class: %v, Coordinates: %s", ignoreAreaClass.Class, ignoreAreaClass.Coordinates))
-	}
-	Log("info", fmt.Sprintf("Draw Ignored Areas: %t", config.StreamDrawIgnoredAreas))
 	Log("info", fmt.Sprintf("Enable Output Stream: %t", config.EnableOutputStream))
 	Log("info", fmt.Sprintf("Output Stream Address: %s", config.OutputStreamAddr))
 	Log("info", "************* EVENTS CONFIG *************")
@@ -890,68 +760,16 @@ func main() {
 	// Define motion mutex
 	runtimeConfig.MotionMutex = &sync.Mutex{}
 
-	// Copy assets to local filesystem
-	path := copyAssetsToTemp()
-	// Start the object detector
-
-	if globalConfig.Motion.OnnxModel != "" {
-		var err error
-		runtimeConfig.ObjectPredictClient, err = ob.Init(ob.Config{Model: "yolov8n", EnableCoreMl: globalConfig.Motion.OnnxEnableCoreMl})
-		if err != nil {
-			fmt.Println("Cannot init model:", err)
-			return
-		}
-
-		defer runtimeConfig.ObjectPredictClient.Close() // Cleanup files
-
-	} else {
-		if globalConfig.Motion.NetworkObjectDetectServer == "" {
-			globalConfig.Motion.NetworkObjectDetectServer = "127.0.0.1:8555"
-			go startObjectDetector(path + "/" + globalConfig.Motion.EmbeddedObjectScript)
-			// Set networkObjectDetectServer path to 127.0.0.1:8555
-			// time.Sleep(10 * time.Second) // Give time to kill old instance if still running
-			// Wait until tcp connection is works to globalConfig.Motion.NetworkObjectDetectServer
-			Log("info", "Waiting for object detector to come up")
-			if !runtimeConfig.modelReady {
-				for {
-					conn, err := net.DialTimeout("tcp", globalConfig.Motion.NetworkObjectDetectServer, 1*time.Second)
-					if err != nil {
-						Log("warning", fmt.Sprintf("Waiting for object detector to start: %v", err))
-						time.Sleep(1 * time.Second)
-					} else {
-						conn.Close()
-						break
-					}
-				}
-			}
-		} else {
-			Log("info", fmt.Sprintf("Checking connection to: %s", globalConfig.Motion.NetworkObjectDetectServer))
-			for {
-				conn, err := net.DialTimeout("tcp", globalConfig.Motion.NetworkObjectDetectServer, 1*time.Second)
-				if err != nil {
-					Log("warning", fmt.Sprintf("Waiting for %s to respond: %v", globalConfig.Motion.NetworkObjectDetectServer, err))
-					time.Sleep(1 * time.Second)
-				} else {
-					conn.Close()
-					break
-				}
-			}
-		}
-	}
-
 	stream = mjpeg.NewStream()
 	if globalConfig.EnableOutputStream {
 		go startWebcamStream(stream)
 	}
 
-	// Define the last image
-	imgLast := image.NewRGBA(image.Rect(0, 0, runtimeConfig.HiResStreamParams.Width, runtimeConfig.HiResStreamParams.Height))
-
 	// Start HI Res prebuffering
 	runtimeConfig.HiResControlChannel = make(chan RecordMsg)
 	go func() {
 		for {
-			recordRTSPStream(globalConfig.HiResDeviceUrl, runtimeConfig.HiResControlChannel, time.Duration(globalConfig.Motion.PrebufferSeconds)*time.Second)
+			recordRTSPStream(globalConfig.HiResDeviceUrl, runtimeConfig.HiResControlChannel, 5*time.Second)
 			// defer close(runtimeConfig.HiResControlChannel)
 			time.Sleep(5 * time.Second)
 			Log("warning", "Restarting HI RTSP feed")
@@ -987,98 +805,10 @@ func main() {
 				draw.Draw(rgba, rgba.Bounds(), msg.Frame, msg.Frame.Bounds().Min, draw.Src)
 			}
 
-			// Handle all motion stuff here
-			if runtimeConfig.MotionTriggered || (!runtimeConfig.MotionTriggered && CountChangedPixels(rgba, imgLast, uint8(30)) > int(globalConfig.PixelMotionAreaThreshold)) { // Use short-circuit to bypass pixel count if event is already triggered, otherwise we may not be able to identify all objects if motion is triggered
-				// If its been more than globalConfig.Motion.EventGap seconds since the last motion event, untrigger
-				if runtimeConfig.MotionTriggered && time.Since(runtimeConfig.MotionTriggeredLast) > time.Duration(globalConfig.Motion.EventGap)*time.Second {
-					go endMotionEvent() // End the motion event
-				}
-
-				// Only run this on every Nth frame
-				if predictFrameCounter%everyNthFrame == 0 {
-					if predictFrameCounter > 10000 {
-						predictFrameCounter = 0
-					}
-					if msg.Frame != nil {
-
-						var predict []Prediction
-						var err error
-						// If globalConfig.Motion.OnnxModel is blank run this
-						// Send data to objectPredict
-						if globalConfig.Motion.OnnxModel == "" {
-							predict, err = objectPredict(msg.Frame)
-							if err != nil {
-								Log("error", fmt.Sprintf("Error running objectPredict: %v", err))
-								return
-							}
-							performDetectionOnObject(nil, rgba, predict)
-						} else {
-							timer := time.Now()
-							objects, resizedImage, err := runtimeConfig.ObjectPredictClient.Predict(msg.Frame)
-							if err != nil {
-								fmt.Println("Cannot predict:", err)
-								return
-							}
-
-							// Detect took
-							took := time.Since(timer).Milliseconds()
-
-							for _, object := range objects {
-								pred := Prediction{
-									Object:     object.ClassID,
-									ClassName:  object.ClassName,
-									Box:        []float32{object.X1, object.Y1, object.X2, object.Y2},
-									Top:        int(object.Y1),
-									Bottom:     int(object.Y2),
-									Left:       int(object.X1),
-									Right:      int(object.X2),
-									Confidence: object.Confidence,
-									Took:       float64(took),
-								}
-								predict = append(predict, pred)
-							}
-							performDetectionOnObject(rgba, resizedImage, predict)
-						}
-						calcInferenceStats(predict) // Calculate inference stats
-
-						// FIX THIS Its taking way too long to process
-						// if len(predict) > 0 {
-						// 	// Notify in realtime about detected objects
-						// 	type Event struct {
-						// 		Type             string       `json:"type"`
-						// 		Timestamp        time.Time    `json:"timestamp"`
-						// 		PredictedObjects []Prediction `json:"predicted_objects"`
-						// 	}
-
-						// 	eventRaw := Event{
-						// 		Type:             "objects_predicted",
-						// 		Timestamp:        time.Now(),
-						// 		PredictedObjects: predict,
-						// 	}
-						// 	eventJson, err := json.Marshal(eventRaw)
-						// 	if err != nil {
-						// 		Log("error", fmt.Sprintf("Error marshalling object_predicted event: %v", err))
-						// 		return
-						// 	}
-						// 	go eventHandler("objects_detected", eventJson)
-						// }
-
-						// if len(predict) > 0 {
-						// 	fname := fmt.Sprintf("%d.jpg", predictFrameCounter)
-						// 	saveJPEG(filepath.Join(globalConfig.Video.HiResPath, fname), rgba, 100)
-						// }
-
-					}
-
-					predictFrameCounter++
-				}
+			// Stream the image to the web if enabled
+			if globalConfig.EnableOutputStream {
+				streamImage(rgba, stream)
 			}
-
-			// if globalConfig.EnableOutputStream {
-			// 	streamImage(rgba, stream) // Stream the image to the web
-			// }
-
-			imgLast = rgba // Set the last image to the current image
 
 			ptime.Finish() // DEBUG TIMER
 			// ptime.PrintStats() // DEBUG TIMER
@@ -1088,233 +818,7 @@ func main() {
 
 }
 
-func performDetectionOnObject(originalFrame *image.RGBA, frame *image.RGBA, prediction []Prediction) {
-	now := time.Now()
-	for _, predict := range prediction {
-		// If class is not within LookForClasses, skip it
-		if len(globalConfig.Motion.LookForClasses) > 0 {
-			found := false
-			for _, filterClass := range globalConfig.Motion.LookForClasses {
-				if predict.ClassName == filterClass {
-					found = true
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-
-		if predict.Confidence < float32(globalConfig.Motion.ConfidenceMinThreshold) {
-			continue
-		}
-
-		rect := image.Rect(predict.Left, predict.Top, predict.Right, predict.Bottom)
-
-		object := TrackedObject{
-			BBox:       rect,
-			Center:     image.Pt((predict.Left+predict.Right)/2, (predict.Top+predict.Bottom)/2),
-			LastMoved:  now,
-			Area:       float64(rect.Dx() * rect.Dy()),
-			Class:      predict.ClassName,
-			Confidence: predict.Confidence,
-		}
-
-		exists := findObjectPosition(object)
-		if !exists {
-
-			// Check if this object is within the areas of interest
-			for _, ignoreAreaClass := range globalConfig.IgnoreAreasClasses {
-				for _, class := range ignoreAreaClass.Class {
-					if class == object.Class {
-						if object.Center.X > ignoreAreaClass.Left && object.Center.X < ignoreAreaClass.Right && object.Center.Y > ignoreAreaClass.Top && object.Center.Y < ignoreAreaClass.Bottom {
-							// This object is within an ignore area, skip it
-							// fmt.Printf("Ignoring object %s @ %d|%f\n", object, object.Center)
-							// Log("warning", fmt.Sprintf("IGNORING OBJECT @ %d|%f [%s|%f]", object.Center, object.Area, object.Class, object.Confidence))
-							return
-						}
-					}
-				}
-			}
-
-			Log("info", fmt.Sprintf("TRIGGERED NEW OBJECT @ COORD: %d AREA: %f [%s|%f]", object.Center, object.Area, object.Class, object.Confidence))
-			if !runtimeConfig.MotionTriggered {
-				// Lock mutex
-				runtimeConfig.MotionMutex.Lock()
-				runtimeConfig.MotionTriggered = true
-				runtimeConfig.MotionTriggeredLast = now
-				runtimeConfig.MotionVideo.CameraName = globalConfig.CameraName
-				runtimeConfig.MotionVideo.MotionStart = now
-				// Generate random string filename for runtimeConfig.MotionVideo.Filename
-				runtimeConfig.MotionVideo.ID = generateRandomString(15)
-				runtimeConfig.MotionVideo.Objects = append(runtimeConfig.MotionVideo.Objects, object)
-				runtimeConfig.MotionVideo.VideoFile = fmt.Sprintf("clip_%s.ts", runtimeConfig.MotionVideo.ID)                                                            // Set filename for video file
-				runtimeConfig.HiResControlChannel <- RecordMsg{Record: true, Filename: filepath.Join(globalConfig.Video.HiResPath, runtimeConfig.MotionVideo.VideoFile)} // Start recording
-
-				// Notify in realtime about detected objects
-				type Event struct {
-					Type                string    `json:"type"`
-					Timestamp           time.Time `json:"timestamp"`
-					MotionTriggeredLast time.Time `json:"motion_triggered_last"`
-					ID                  string    `json:"id"`
-					MotionStart         time.Time `json:"motion_start"`
-					Objects             []TrackedObject
-					CameraName          string `json:"camera_name"`
-				}
-
-				eventRaw := Event{
-					Type:                "motion_started",
-					Timestamp:           time.Now(),
-					MotionTriggeredLast: time.Now(),
-					ID:                  runtimeConfig.MotionVideo.ID,
-					MotionStart:         runtimeConfig.MotionVideo.MotionStart,
-					Objects:             runtimeConfig.MotionVideo.Objects,
-					CameraName:          runtimeConfig.MotionVideo.CameraName,
-				}
-				eventJson, err := json.Marshal(eventRaw)
-				if err != nil {
-					Log("error", fmt.Sprintf("Error marshalling motion_started event: %v", err))
-					return
-				}
-				eventHandler("motion_start", eventJson)
-
-				// Send pushover notification
-				if globalConfig.Notifications.EnablePushoverAlerts {
-					frameCopy := *frame
-
-					ob.DrawRectangle(&frameCopy, rect, color.RGBA{255, 165, 0, 255}, 2) // Draw orange rectangle
-
-					pt := image.Pt(predict.Left, predict.Top-5)
-					if predict.Top-5 < 0 {
-						pt = image.Pt(predict.Left, predict.Top+20) // if the box is too close to the top of the image, put the label inside the box
-					}
-					ob.AddLabelWithTTF(&frameCopy, fmt.Sprintf("%s %.2f", predict.ClassName, predict.Confidence), pt, color.RGBA{255, 165, 0, 255}, 12.0) // Orange size 12 font
-
-					// Send pushover notification
-					err := sendPushoverNotification(globalConfig.Notifications.PushoverUserKey, globalConfig.Notifications.PushoverAppToken, "Motion detected!", &frameCopy)
-					if err != nil {
-						Log("error", fmt.Sprintf("Error sending pushover notification: %v", err))
-					}
-
-				}
-
-				// Unlock mutex
-				runtimeConfig.MotionMutex.Unlock()
-			} else {
-				// Lock mutex
-				runtimeConfig.MotionMutex.Lock()
-				runtimeConfig.MotionTriggeredLast = now
-				runtimeConfig.MotionVideo.Objects = append(runtimeConfig.MotionVideo.Objects, object)
-
-				// Notify in realtime about detected objects
-				type Event struct {
-					Type                string    `json:"type"`
-					Timestamp           time.Time `json:"timestamp"`
-					MotionTriggeredLast time.Time `json:"motion_triggered_last"`
-					ID                  string    `json:"id"`
-					MotionStart         time.Time `json:"motion_start"`
-					Objects             []TrackedObject
-					CameraName          string `json:"camera_name"`
-				}
-
-				eventRaw := Event{
-					Type:                "motion_update",
-					Timestamp:           time.Now(),
-					MotionTriggeredLast: time.Now(),
-					ID:                  runtimeConfig.MotionVideo.ID,
-					MotionStart:         runtimeConfig.MotionVideo.MotionStart,
-					Objects:             runtimeConfig.MotionVideo.Objects,
-					CameraName:          runtimeConfig.MotionVideo.CameraName,
-				}
-				eventJson, err := json.Marshal(eventRaw)
-				if err != nil {
-					Log("error", fmt.Sprintf("Error marshalling motion_update event: %v", err))
-					return
-				}
-				eventHandler("motion_update", eventJson)
-
-				// Unlock mutex
-				runtimeConfig.MotionMutex.Unlock()
-			}
-
-			// Log("error", fmt.Sprintf("STORED %d OBJECTS", len(runtimeConfig.MotionVideo.Objects)))
-
-			ob.DrawRectangle(frame, rect, color.RGBA{255, 165, 0, 255}, 2) // Draw orange rectangle
-
-			pt := image.Pt(predict.Left, predict.Top-5)
-			if predict.Top-5 < 0 {
-				pt = image.Pt(predict.Left, predict.Top+20) // if the box is too close to the top of the image, put the label inside the box
-			}
-			ob.AddLabelWithTTF(frame, fmt.Sprintf("%s %.2f", predict.ClassName, predict.Confidence), pt, color.RGBA{255, 165, 0, 255}, 12.0) // Orange size 12 font
-
-			// Store snapshot of the object
-			if runtimeConfig.MotionVideo.ID != "" {
-				snapshotFilename := fmt.Sprintf("snap_%s_%s.jpg", runtimeConfig.MotionVideo.ID, generateRandomString(4))
-				runtimeConfig.MotionVideo.Snapshots = append(runtimeConfig.MotionVideo.Snapshots, snapshotFilename)
-
-				if originalFrame != nil {
-					origWidth, origHeight := ob.GetImageDimensions(originalFrame)
-					// Resize the image to the original dimensions
-					frame = ob.RemovePadding(frame, origWidth, origHeight)
-				}
-
-				// Add frames for gif
-				copyFrame := *frame
-				gifSliceMutex.Lock()
-				gifSlice = append(gifSlice, copyFrame)
-				gifSliceMutex.Unlock()
-
-				saveJPEG(filepath.Join(globalConfig.Video.HiResPath, snapshotFilename), frame, 100)
-			} else {
-				Log("warning", "runtimeConfig.MotionVideo.ID is empty, not writing snapshot. This shouldnt happen.")
-			}
-		}
-	}
-}
-
-// Function that goes over lastPositions and checks if any of them are within of a threshold of the current center
-func findObjectPosition(object TrackedObject) bool {
-	// Check if this object has been seen before
-	for i := 0; i < len(lastPositions); i++ {
-		distance := math.Sqrt(float64((object.Center.X-lastPositions[i].Center.X)*(object.Center.X-lastPositions[i].Center.X) + (object.Center.Y-lastPositions[i].Center.Y)*(object.Center.Y-lastPositions[i].Center.Y)))
-		// fmt.Printf("Distance: %v\n", distance)
-		if distance < globalConfig.ObjectCenterMovementThreshold {
-			// Compare area as well to see if its +- within the threshold
-			areaDiff := math.Abs(object.Area - lastPositions[i].Area)
-			// fmt.Printf("Area diff: %v\n", areaDiff)
-			if areaDiff < globalConfig.ObjectAreaThreshold {
-				// This means a match, overwrite old object with updated one
-				// Log("warning", fmt.Sprintf("UPDATING OBJECT @ %d|%f TO %d|%f DISTANCE: %d ADIFF: %d", lastPositions[i].Center, lastPositions[i].Area, object.Center, object.Area, int(distance), int(areaDiff)))
-				lastPositions[i] = object
-				return true
-			}
-		}
-	}
-
-	// Clean up lastPositions
-	for i := 0; i < len(lastPositions); i++ {
-		// Check if last update is more than 30 seconds ago
-		if time.Since(lastPositions[i].LastMoved) > 30*time.Second {
-			// Delete this object
-			// Log("error", fmt.Sprintf("EXPIRING OBJECT @ %d|%f [%s|%f]", lastPositions[i].Center, lastPositions[i].Area, lastPositions[i].Class, lastPositions[i].Confidence))
-			lastPositions = append(lastPositions[:i], lastPositions[i+1:]...)
-		}
-	}
-
-	// This is a new object, add it
-	lastPositions = append(lastPositions, object)
-	return false
-}
-
 func streamImage(img *image.RGBA, stream *mjpeg.Stream) {
-	// Draw ignore areas from IgnoreAreasClasses
-	if globalConfig.StreamDrawIgnoredAreas {
-		for _, ignoreAreaClass := range globalConfig.IgnoreAreasClasses {
-			// Draw the ignore area
-			rect := image.Rect(ignoreAreaClass.Left, ignoreAreaClass.Top, ignoreAreaClass.Right, ignoreAreaClass.Bottom)
-			ob.DrawRectangle(img, rect, color.RGBA{255, 0, 0, 0}, 2)
-		}
-	}
-
 	// Encode the RGBA image to JPEG
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, nil); err != nil {
@@ -1339,278 +843,6 @@ func startWebcamStream(stream *mjpeg.Stream) {
 	log.Fatal(server.ListenAndServe())
 }
 
-func establishConnection() error {
-	d := net.Dialer{}
-	var err error
-	runtimeConfig.objectPredictConn, err = d.Dial("tcp", globalConfig.Motion.NetworkObjectDetectServer)
-	return err
-}
-
-func objectPredict(imgRaw image.Image) ([]Prediction, error) {
-	// Create a channel to communicate the result of the function
-	resultChan := make(chan []Prediction, 1)
-	errorChan := make(chan error, 1)
-
-	// Start the actual work in a goroutine
-	go func() {
-		// Start timer
-		start := time.Now()
-
-		// Convert the image to a byte array
-		buf := new(bytes.Buffer)
-		if err := jpeg.Encode(buf, imgRaw, nil); err != nil {
-			errorChan <- err
-			return
-		}
-		imgData := buf.Bytes()
-
-		// Check if connection is nil and re-establish it if needed
-		if runtimeConfig.objectPredictConn == nil {
-			// Re-establish connection
-			if err := establishConnection(); err != nil {
-				errorChan <- err
-				return
-			}
-		}
-
-		// Check if connection is broken and re-establish it if needed
-		if err := runtimeConfig.objectPredictConn.SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
-			// Re-establish connection
-			if err := establishConnection(); err != nil {
-				errorChan <- err
-				return
-			}
-		}
-
-		// Send the size of the image data
-		size := uint32(len(imgData))
-		sizeBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(sizeBytes, size)
-		if _, err := runtimeConfig.objectPredictConn.Write(sizeBytes); err != nil {
-			// Re-establish connection
-			if err := establishConnection(); err != nil {
-				errorChan <- err
-				return
-			}
-		}
-
-		// Send the image data
-		if _, err := runtimeConfig.objectPredictConn.Write(imgData); err != nil {
-			// Re-establish connection
-			if err := establishConnection(); err != nil {
-				errorChan <- err
-				return
-			}
-		}
-
-		// Read the response
-		reader := bufio.NewReader(runtimeConfig.objectPredictConn)
-		respData, err := reader.ReadBytes('\n')
-		if err != nil {
-			errorChan <- err
-			return
-		}
-
-		// fmt.Printf("RAW: %s\n", respData)
-
-		// Parse the response data as a Prediction
-		var preds []Prediction
-		if err := json.Unmarshal(respData, &preds); err != nil {
-			errorChan <- err
-			return
-		}
-
-		for i, pred := range preds {
-			box := pred.Box
-			preds[i].Top = int(box[1])
-			preds[i].Bottom = int(box[3])
-			preds[i].Left = int(box[0])
-			preds[i].Right = int(box[2])
-			preds[i].Took = float64(time.Since(start).Milliseconds())
-		}
-
-		resultChan <- preds
-	}()
-
-	// Wait for the result or the context timeout
-	select {
-	case result := <-resultChan:
-		return result, nil
-	case err := <-errorChan:
-		Log("debug", fmt.Sprintf("Error running objectPredict: %v", err))
-		return nil, err
-	}
-}
-
-func startObjectDetector(scriptPath string) {
-	basePath := filepath.Dir(scriptPath)
-	restartCount := 0
-	pidFileName := filepath.Base(scriptPath) + ".pid"
-	pidFilePath := filepath.Join("/tmp", pidFileName)
-
-	// Read the first line of the script to get the shebang
-	file, err := os.Open(scriptPath)
-	if err != nil {
-		Log("error", fmt.Sprintf("Error opening script: %v", err))
-		return
-	}
-	reader := bufio.NewReader(file)
-	shebang, err := reader.ReadString('\n')
-	file.Close()
-	if err != nil {
-		Log("error", fmt.Sprintf("Error reading shebang: %v", err))
-		return
-	}
-
-	// Extract the interpreter from the shebang
-	shebang = strings.TrimSpace(strings.TrimPrefix(shebang, "#!"))
-	interpreterArgs := strings.Split(shebang, " ")
-	if len(interpreterArgs) < 2 {
-		interpreterArgs = []string{"python3"} // Default interpreter if shebang is not found or incorrect
-	}
-
-	// Try to read existing PID file
-	pidData, err := os.ReadFile(pidFilePath)
-	if err == nil {
-		pid, err := strconv.Atoi(string(pidData))
-		if err == nil {
-			process, err := os.FindProcess(pid)
-			if err == nil {
-				process.Kill() // Try to kill the existing process
-			}
-		}
-	}
-
-	for {
-		if restartCount > 3 {
-			Log("error", "Embedded python script failed 3 times, giving up")
-			os.Exit(1)
-		}
-
-		cmd := exec.Command(interpreterArgs[0], append(interpreterArgs[1:], "-u", scriptPath)...)
-		cmd.Dir = basePath
-
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			Log("error", fmt.Sprintf("Error creating StdoutPipe for Cmd: %v", err))
-			continue
-		}
-
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-
-		Log("info", "Starting embedded python object server")
-		err = cmd.Start()
-
-		if err != nil {
-			Log("error", fmt.Sprintf("Error starting Cmd: %v", err))
-			continue
-		}
-
-		// Write PID to file
-		err = os.WriteFile(pidFilePath, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
-		if err != nil {
-			Log("error", fmt.Sprintf("Error writing PID to file: %v", err))
-			cmd.Process.Kill()
-			continue
-		}
-
-		go readOutput(stdout)
-
-		// Create a channel to catch signals to the process
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		go func() {
-			<-c
-			if cmd.Process != nil {
-				cmd.Process.Kill()
-			}
-			os.Remove(pidFilePath) // Remove PID file
-			os.Exit(1)
-		}()
-
-		runtimeConfig.modelReady = true // Allow objectPredict to start sending images
-
-		err = cmd.Wait()
-		if err != nil {
-			Log("error", fmt.Sprintf("Embedded python script failed: %s", stderr.String()))
-		} else {
-			Log("info", "Embedded python script exited, restarting...")
-		}
-
-		os.Remove(pidFilePath) // Remove PID file
-
-		time.Sleep(2 * time.Second)
-		restartCount++
-	}
-}
-
-// Helped function for startObjectDetector
-func readOutput(r io.ReadCloser) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		// Strip newlines
-		out := strings.TrimSuffix(scanner.Text(), "\n")
-
-		// Strip empty lines
-		if out == "" {
-			continue
-		}
-
-		Log("debug", fmt.Sprintf("PYTHON_MODEL_STDOUT: %s", out))
-	}
-}
-
-// Function that copies assetsFs to /tmp in a random folder and returns path
-func copyAssetsToTemp() string {
-	// Create a random folder in /tmp
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	tempDir := fmt.Sprintf("/tmp/%d", r.Intn(1000)+1)
-	os.Mkdir(tempDir, 0755)
-
-	// Delete the temporary directory when the application exits
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-c
-		os.RemoveAll(tempDir)
-		os.Exit(0)
-	}()
-
-	// Copy assets to temp dir
-	assets, err := assetsFs.ReadDir("assets") // Read the "assets" directory instead of "."
-	if err != nil {
-		panic(err)
-	}
-
-	for _, asset := range assets {
-
-		if asset.IsDir() {
-			continue
-		}
-		data, err := assetsFs.ReadFile("assets/" + asset.Name()) // Add "assets/" prefix when reading the file
-		if err != nil {
-			panic(err)
-		}
-
-		err = os.WriteFile(filepath.Join(tempDir, asset.Name()), data, 0644)
-		if err != nil {
-			panic(err)
-		}
-
-		// Make *.py files executable
-		if filepath.Ext(asset.Name()) == ".py" {
-			err = os.Chmod(filepath.Join(tempDir, asset.Name()), 0755)
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
-
-	return tempDir
-}
-
-// This function prints out embedded template.json file
 func printTemplateFile() {
 	fileBytes, err := assetsFs.ReadFile("assets/template.json")
 	if err != nil {
@@ -1698,185 +930,6 @@ func sendToMQTT(topic string, message string, host string, port int, user string
 	}
 
 	return nil // Return nil if there were no errors
-}
-
-func calcInferenceStats(predict []Prediction) {
-	// Calculate avg of all predict times for this run
-	stats := InferenceStats{}
-	stats.Min = math.MaxFloat64
-	count := 0
-
-	if len(predict) == 0 {
-		return
-	}
-
-	for _, prediction := range predict {
-		if prediction.Took > float64(1000/everyNthFrame) {
-			Log("warning", fmt.Sprintf("Inference took %fms, max ceiling should be: %dms", prediction.Took, 1000/everyNthFrame))
-		}
-
-		if prediction.Took > stats.Max {
-			stats.Max = prediction.Took
-		}
-
-		if prediction.Took < stats.Min {
-			stats.Min = prediction.Took
-		}
-
-		stats.Avg += prediction.Took
-		count++
-	}
-
-	stats.Avg = stats.Avg / float64(count)
-
-	runtimeConfig.InferenceTimingBuffer = append(runtimeConfig.InferenceTimingBuffer, stats)
-
-	if len(runtimeConfig.InferenceTimingBuffer) >= interenceAvgInterval {
-		statsFinal := InferenceStats{}
-		statsFinal.Min = math.MaxFloat64
-		statsFinal.Max = 0 // Initialize Max to 0
-		// Calculate avg inference time
-		for _, inferenceTime := range runtimeConfig.InferenceTimingBuffer {
-			statsFinal.Avg += inferenceTime.Avg
-			if inferenceTime.Min < statsFinal.Min {
-				statsFinal.Min = inferenceTime.Min
-			}
-
-			if inferenceTime.Max > statsFinal.Max {
-				statsFinal.Max = inferenceTime.Max
-			}
-		}
-
-		statsFinal.Avg = statsFinal.Avg / float64(len(runtimeConfig.InferenceTimingBuffer))
-
-		// Log avg inference time
-		type Event struct {
-			Type         string    `json:"type"`
-			Timestamp    time.Time `json:"timestamp"`
-			InferenceAvg float64   `json:"inference_avg"`
-			InferenceMin float64   `json:"inference_min"`
-			InferenceMax float64   `json:"inference_max"`
-			Ceiling      int       `json:"ceiling"`
-		}
-
-		eventRaw := Event{
-			Type:         "inferencing_avg",
-			Timestamp:    time.Now(),
-			InferenceAvg: statsFinal.Avg,
-			InferenceMin: statsFinal.Min,
-			InferenceMax: statsFinal.Max,
-			Ceiling:      1000 / everyNthFrame,
-		}
-		eventJson, err := json.Marshal(eventRaw)
-		if err != nil {
-			Log("error", fmt.Sprintf("Error marshalling inference_avg event: %v: Event: %v", err, eventRaw))
-			return
-		}
-		eventHandler("inference_avg", eventJson)
-		Log("notice", fmt.Sprintf("Inference avg: %fms, min: %fms, max: %fms", statsFinal.Avg, statsFinal.Min, statsFinal.Max))
-
-		// Clear inferenceTimingLog
-		runtimeConfig.InferenceTimingBuffer = make([]InferenceStats, 0)
-	}
-}
-
-func endMotionEvent() {
-	// Log("info", fmt.Sprintf("SINCE_LAST_EVENT: %d GAP: %d", time.Since(runtimeConfig.MotionTriggeredLast), time.Duration(globalConfig.Motion.EventGap)*time.Second))
-	Log("info", "MOTION_ENDED")
-	runtimeConfig.MotionTriggered = false
-	runtimeConfig.MotionMutex.Lock()
-
-	if globalConfig.Notifications.EnablePushoverAlerts { // Send pushover notification
-		// // Create gif from snapshots
-		gifSliceMutex.Lock()
-		CreateGIF(gifSlice, fmt.Sprintf("%s/%s.gif", globalConfig.Video.HiResPath, runtimeConfig.MotionVideo.ID), 100)
-		gifSlice = make([]image.RGBA, 0)
-		gifSliceMutex.Unlock()
-
-		// Send pushover notification
-		err := sendPushoverNotificationGif(globalConfig.Notifications.PushoverUserKey, globalConfig.Notifications.PushoverAppToken, "Motion ended", fmt.Sprintf("%s/%s.gif", globalConfig.Video.HiResPath, runtimeConfig.MotionVideo.ID))
-		if err != nil {
-			Log("error", fmt.Sprintf("Error sending pushover notification: %v", err))
-		}
-		// Delete gif
-		err = os.Remove(fmt.Sprintf("%s/%s.gif", globalConfig.Video.HiResPath, runtimeConfig.MotionVideo.ID))
-		if err != nil {
-			Log("error", fmt.Sprintf("Error removing gif file: %v", err))
-		}
-	}
-
-	// Stop Hi res recording and dump json file as well as clear struct
-	runtimeConfig.MotionVideo.MotionEnd = time.Now()
-	runtimeConfig.HiResControlChannel <- RecordMsg{Record: false}
-
-	if globalConfig.Video.RecodeTsToMp4 { // Store this for future reference
-		runtimeConfig.MotionVideo.RecodedToMp4 = true
-		go func(videoFile string) {
-			// Recode the ts file to mp4
-			_, err := recodeToMP4(videoFile)
-			if err != nil {
-				Log("error", fmt.Sprintf("Error recoding ts file to mp4: %v", err))
-			} else {
-				// Remove the ts file
-				err = os.Remove(videoFile)
-				if err != nil {
-					Log("error", fmt.Sprintf("Error removing ts file: %v", err))
-				}
-			}
-		}(filepath.Join(globalConfig.Video.HiResPath, runtimeConfig.MotionVideo.VideoFile))
-	}
-
-	jsonData, err := json.Marshal(runtimeConfig.MotionVideo)
-	if err != nil {
-		Log("error", fmt.Sprintf("Error marshalling metadata: %v", err))
-	}
-
-	err = os.WriteFile(filepath.Join(globalConfig.Video.HiResPath, fmt.Sprintf("meta_%s.json", runtimeConfig.MotionVideo.ID)), jsonData, 0644)
-	if err != nil {
-		Log("error", fmt.Sprintf("Error writing metadata file: %v", err))
-	}
-
-	// Notify in realtime about detected objects
-	// type Event struct {
-	// 	Type                string          `json:"type"`
-	// 	Timestamp           time.Time       `json:"timestamp"`
-	// 	MotionTriggeredLast time.Time       `json:"motion_triggered_last"`
-	// 	ID                  string          `json:"id"`
-	// 	MotionStart         time.Time       `json:"motion_start"`
-	// 	MotionEnd           time.Time       `json:"motion_end"`
-	// 	Objects             []TrackedObject `json:"objects"`
-	// 	RecodedToMp4        bool            `json:"recoded_to_mp4"`
-	// 	Snapshots           []string        `json:"snapshots"`
-	// 	VideoFile           string          `json:"video_file"`
-	// 	CameraName          string          `json:"camera_name"`
-	// 	MetadataPath        string          `json:"metadata_path"`
-	// }
-
-	// eventRaw := Event{
-	// 	Type:                "motion_ended",
-	// 	Timestamp:           time.Now(),
-	// 	MotionTriggeredLast: runtimeConfig.MotionTriggeredLast,
-	// 	ID:                  runtimeConfig.MotionVideo.ID,
-	// 	MotionStart:         runtimeConfig.MotionVideo.MotionStart,
-	// 	MotionEnd:           runtimeConfig.MotionVideo.MotionEnd,
-	// 	Objects:             runtimeConfig.MotionVideo.Objects,
-	// 	RecodedToMp4:        runtimeConfig.MotionVideo.RecodedToMp4,
-	// 	Snapshots:           runtimeConfig.MotionVideo.Snapshots,
-	// 	VideoFile:           runtimeConfig.MotionVideo.VideoFile,
-	// 	CameraName:          runtimeConfig.MotionVideo.CameraName,
-	// 	MetadataPath:        filepath.Join(globalConfig.Video.HiResPath, fmt.Sprintf("meta_%s.json", runtimeConfig.MotionVideo.ID)),
-	// }
-	// eventJson, err := json.Marshal(eventRaw)
-	// if err != nil {
-	// 	Log("error", fmt.Sprintf("Error marshalling motion_ended event: %v", err))
-	// 	return
-	// }
-	// eventHandler("motion_end", eventJson)
-
-	// 	// Clear the whole runtimeConfig.MotionVideo struct
-	runtimeConfig.MotionVideo = VideoMetadata{}
-
-	runtimeConfig.MotionMutex.Unlock()
 }
 
 func sendPushoverNotification(userKey string, appToken string, msg string, img *image.RGBA) error {

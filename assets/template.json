@@ -18,23 +18,6 @@
         "recodeTsToMp4": true,
         "onlyRemuxMp4": true
     },
-    "motion": {
-        "confidenceMinThreshold": 0.3,
-        "lookForClasses": ["car", "truck", "person", "bicycle", "motorcycle", "bus", "cat", "dog", "boat"],
-        "onnxModel": "yolov8n",
-        "onnxEnableCoreMl": true,
-        "embeddedObjectScript": "objectDetectServerYolo.py",
-        "networkObjectDetectServer": "",
-        "prebufferSeconds": 5,
-        "eventGap": 10
-    },
-    "pixelMotionAreaThreshold": 0.00,
-    "objectCenterMovementThreshold": 50.0,
-    "objectAreaThreshold": 2000.0,
-    "ignoreAreasClasses": [
-        {"class": ["template"], "coordinates": "0,0,0,0"}
-    ],
-    "streamDrawIgnoredAreas": false,
     "enableOutputStream": false,
     "outputStreamAddr": ":8040",
     "events": {

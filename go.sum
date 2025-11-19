@@ -1,5 +1,3 @@
-github.com/8ff/onnxruntime_go v0.0.0-20230830191505-2b14a218432e h1:471ee5xiyPAM4P5bUS03t462ZZk0tAKVVzJ30DBzEpA=
-github.com/8ff/onnxruntime_go v0.0.0-20230830191505-2b14a218432e/go.mod h1:0OvBfqX5NGJJIMwZhLtZ9udqfyBpcXObhCbzWn4Iq6M=
 github.com/8ff/prettyTimer v0.0.0-20230830184900-c96793faf613 h1:mIPSzE+OciNlYwNQs1qi7GoKRI3SKGKrVsGnap20iqQ=
 github.com/8ff/prettyTimer v0.0.0-20230830184900-c96793faf613/go.mod h1:iQAVuoCXBrrxT875kd25GCALLf+ulTOt/mCikuQs2j8=
 github.com/8ff/tuna v0.0.0-20230811173825-52af88c52674 h1:9L0K8szFUXJ0V71/I5YJeCmOXVhgU0+v0+9nf8mHqG0=
