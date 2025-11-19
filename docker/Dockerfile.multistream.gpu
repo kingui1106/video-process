@@ -27,8 +27,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o firescrew_multistream \
     ./firescrew_multistream.go
 
-# Final stage - NVIDIA CUDA base image
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+# Final stage - NVIDIA CUDA base image (base variant includes nvidia-smi)
+FROM nvidia/cuda:12.8.0-base-ubuntu22.04
 
 # Configure apt to use China mirrors for faster downloads
 RUN sed -i 's/archive.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list && \
@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     wget \
+    nvidia-utils-535 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install FFmpeg with CUDA support from PPA
@@ -46,6 +47,9 @@ RUN apt-get update && apt-get install -y software-properties-common && \
     add-apt-repository ppa:ubuntuhandbook1/ffmpeg7 -y && \
     apt-get update && apt-get install -y ffmpeg && \
     rm -rf /var/lib/apt/lists/*
+
+# Verify NVIDIA GPU utilities are installed
+RUN nvidia-smi --version || echo "Warning: nvidia-smi not accessible (normal during build)"
 
 # Verify FFmpeg CUDA support
 RUN ffmpeg -hwaccels 2>&1 | grep -q cuda || echo "Warning: FFmpeg may not have CUDA support"
