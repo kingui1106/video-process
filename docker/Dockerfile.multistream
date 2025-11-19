@@ -1,0 +1,55 @@
+# Multi-stage build for firescrew_multistream
+FROM golang:1.24-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git gcc musl-dev
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the multistream binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-X 'main.Version=$(date +'%Y-%m-%d_%H:%M:%S')' -s -w" \
+    -o firescrew_multistream \
+    ./firescrew_multistream.go
+
+# Final stage
+FROM debian:stable-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/firescrew_multistream /app/firescrew_multistream
+
+# Copy assets (fonts, etc.)
+COPY --from=builder /build/assets /app/assets
+
+# Create media directory for recordings/snapshots
+RUN mkdir -p /app/media
+
+# Expose web port (default 8081, configurable in config.json)
+EXPOSE 8081
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8081/api/status || exit 1
+
+# Run the application
+# Config file should be mounted at /app/config.json
+ENTRYPOINT ["/app/firescrew_multistream"]
+

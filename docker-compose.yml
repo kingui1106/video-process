@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  firescrew_multistream:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.multistream
+    container_name: firescrew_multistream
+    restart: unless-stopped
+    ports:
+      - "8081:8081"  # Web interface port (matches config.json webPort)
+    volumes:
+      # Mount config file
+      - ./config.json:/app/config.json:rw
+      # Optional: Mount media directory for recordings/snapshots
+      - ./media:/app/media:rw
+      # Optional: Mount assets directory
+      - ./assets:/app/assets:ro
+    environment:
+      # Optional environment variables
+      - TZ=Asia/Shanghai
+      - FFMPEG_LOGLEVEL=warning
+    networks:
+      - firescrew_network
+    # Healthcheck to ensure service is running
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Resource limits (optional, adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  firescrew_network:
+    driver: bridge
+

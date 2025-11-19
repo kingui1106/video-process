@@ -1,0 +1,64 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+doc/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+firescrew
+firescrew_multistream
+firescrew_simplified
+
+# Test files
+*_test.go
+test_*.bat
+test_*.sh
+
+# Media and recordings
+media/
+rec/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+
+# Demo files
+demoStream/
+
+# Legacy files
+legacy/
+
+# Docker files (except Dockerfile)
+docker-compose*.yml
+.dockerignore
+
+# Scripts
+*.bat
+*.sh
+!docker/run-firescrew.sh
+
+# Config files (will be mounted)
+config.json
+config_multistream.json
+
