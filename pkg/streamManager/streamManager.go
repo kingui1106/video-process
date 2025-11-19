@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -457,9 +458,31 @@ func (sm *StreamManager) StartStream(cameraID string) error {
 	return nil
 }
 
+// isGPUError checks if the error message indicates a GPU-related failure
+func isGPUError(errorMsg string) bool {
+	gpuErrorPatterns := []string{
+		"Cannot load libnvcuvid",
+		"Failed loading nvcuvid",
+		"Failed setup for format cuda",
+		"hwaccel initialisation returned error",
+		"Impossible to convert between the formats",
+		"CUDA",
+		"cuvid",
+	}
+
+	for _, pattern := range gpuErrorPatterns {
+		if strings.Contains(errorMsg, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // processCamera processes video frames from a camera
 func (sm *StreamManager) processCamera(camera *Camera, stream *mjpeg.Stream) {
 	frameChannel := make(chan FrameMsg)
+	gpuErrorCount := 0
+	const maxGPUErrors = 3 // 连续3次GPU错误后回退
 
 	go func() {
 		for {
@@ -472,8 +495,27 @@ func (sm *StreamManager) processCamera(camera *Camera, stream *mjpeg.Stream) {
 	for msg := range frameChannel {
 		if msg.Error != "" {
 			log.Printf("Error from camera %s: %s", camera.ID, msg.Error)
+
+			// 检测GPU错误并自动回退到CPU模式
+			if sm.gpuAvailable && isGPUError(msg.Error) {
+				gpuErrorCount++
+				if gpuErrorCount >= maxGPUErrors {
+					log.Printf("⚠ GPU acceleration failed %d times for camera %s, falling back to CPU mode", gpuErrorCount, camera.ID)
+					log.Printf("⚠ GPU Error: libnvcuvid.so.1 not found. Please ensure:")
+					log.Printf("   1. NVIDIA driver >= 470.x is installed on host")
+					log.Printf("   2. nvidia-docker2 and nvidia-container-toolkit are installed")
+					log.Printf("   3. Docker is configured with NVIDIA runtime")
+					sm.gpuAvailable = false
+					gpuErrorCount = 0 // 重置计数器
+				}
+			} else {
+				gpuErrorCount = 0 // 非GPU错误，重置计数器
+			}
 			continue
 		}
+
+		// 成功处理帧，重置错误计数
+		gpuErrorCount = 0
 
 		if msg.Frame != nil {
 			rgba, ok := msg.Frame.(*image.RGBA)
@@ -525,7 +567,7 @@ func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- Frame
 			"-analyzeduration", "1000000",
 			"-probesize", "1000000",
 			"-vf", "hwdownload,format=nv12,select=not(mod(n\\,5))",
-			"-vsync", "vfr",
+			"-fps_mode", "vfr",
 			"-c:v", "png",
 			"-f", "image2pipe",
 			"-",
@@ -539,7 +581,7 @@ func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- Frame
 			"-analyzeduration", "1000000",
 			"-probesize", "1000000",
 			"-vf", `select=not(mod(n\,5))`,
-			"-vsync", "vfr",
+			"-fps_mode", "vfr",
 			"-c:v", "png",
 			"-f", "image2pipe",
 			"-",

@@ -1,4 +1,4 @@
-# Multi-stage build for firescrew_multistream with GPU support
+# Stage 1: Build Go application
 FROM docker.1ms.run/golang:1.24-alpine AS builder
 
 # Configure apk to use China mirrors for faster downloads
@@ -27,52 +27,39 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o firescrew_multistream \
     ./firescrew_multistream.go
 
-# Final stage - 使用NVIDIA CUDA基础镜像以支持GPU加速 (适配驱动570.195.03)
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+# Stage 2: Final runtime - 直接使用支持CUDA的FFmpeg镜像
+# 这个镜像已经包含了FFmpeg 7.1和完整的CUDA/NVENC/NVDEC支持
+FROM jrottenberg/ffmpeg:7.1-nvidia2404
 
-# 设置时区和用户
-ENV TZ=Asia/Shanghai
+# 设置时区和环境变量
+ENV TZ=Asia/Shanghai \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
 USER root
 
-# 配置阿里云 Ubuntu 源
-RUN if [ -f /etc/apt/sources.list ]; then cp /etc/apt/sources.list /etc/apt/sources.list.bak; fi
-RUN echo "deb http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse" > /etc/apt/sources.list && \
-    echo "deb-src http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb-src http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb-src http://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse" >> /etc/apt/sources.list
-
-# 设置环境变量
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-
-# Install runtime dependencies including FFmpeg with CUDA support
-RUN apt-get update && apt-get install -y --fix-missing \
+# 安装应用运行所需的依赖（jrottenberg镜像基于Ubuntu 24.04）
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
-# 安装多媒体和系统依赖
-RUN apt-get update && apt-get install -y --fix-missing \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
+    libxrender1 \
     libgomp1 \
-    libgl1-mesa-glx \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装FFmpeg和多媒体依赖
-RUN apt-get update && apt-get install -y --fix-missing \
-    libgstreamer1.0-0 \
-    libgstreamer-plugins-base1.0-0 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Verify FFmpeg CUDA support
-RUN ffmpeg -hwaccels 2>&1 | grep -q cuda || echo "Warning: FFmpeg may not have CUDA support"
+# Verify FFmpeg CUDA support (already built-in)
+RUN echo "=== FFmpeg Version ===" && \
+    ffmpeg -version && \
+    echo "" && \
+    echo "=== Hardware Accelerators ===" && \
+    ffmpeg -hwaccels && \
+    echo "" && \
+    (ffmpeg -hwaccels 2>&1 | grep -q cuda && \
+        echo "✓ FFmpeg CUDA support verified successfully!" || \
+        echo "⚠ Warning: FFmpeg CUDA support not found")
 
 # Create app directory
 WORKDIR /app
