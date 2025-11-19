@@ -22,20 +22,22 @@ services:
       - TZ=Asia/Shanghai
       # FFmpeg settings
       - FFMPEG_LOGLEVEL=warning
+      # Performance settings
+      - OMP_NUM_THREADS=4
+      - MKL_NUM_THREADS=4
       # NVIDIA GPU support
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     networks:
       - firescrew_network
-    # GPU support - requires nvidia-container-toolkit
-    # RTX 4090 优化：移除 CPU/内存限制，充分利用硬件性能
+    # GPU配置 - 需要宿主机安装nvidia-docker2
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1  # 使用 1 个 GPU (RTX 4090)
-              capabilities: [gpu, compute, video]
+              count: all  # 使用所有可用 GPU
+              capabilities: [gpu]
     # Healthcheck
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3099/api/status"]
