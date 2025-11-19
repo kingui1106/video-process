@@ -1,0 +1,136 @@
+{
+  "webPort": ":3099",
+  "enableGPU": true,
+  "cameras": [
+    {
+      "id": "32010000001320000999_32010000001320000123",
+      "name": "停车场摄像头",
+      "rtspUrl": "rtsp://192.168.102.29:554/rtp/32010600411317000012_32010600411317000012?originTypeStr=rtp_push",
+      "roi": null,
+      "drawElements": [
+        {
+          "type": "rectangle",
+          "points": [
+            {
+              "x": 187,
+              "y": 156
+            },
+            {
+              "x": 1383,
+              "y": 442
+            }
+          ],
+          "text": "",
+          "color": "#FF0000",
+          "thickness": 2,
+          "fontSize": 0
+        },
+        {
+          "type": "polyline",
+          "points": [
+            {
+              "x": 275,
+              "y": 545
+            },
+            {
+              "x": 640,
+              "y": 244
+            },
+            {
+              "x": 1302,
+              "y": 692
+            },
+            {
+              "x": 1531,
+              "y": 322
+            },
+            {
+              "x": 1531,
+              "y": 322
+            },
+            {
+              "x": 1531,
+              "y": 322
+            }
+          ],
+          "text": "",
+          "color": "#FF0000",
+          "thickness": 2,
+          "fontSize": 0
+        },
+        {
+          "type": "polyline",
+          "points": [
+            {
+              "x": 186,
+              "y": 409
+            },
+            {
+              "x": 852,
+              "y": 472
+            },
+            {
+              "x": 1002,
+              "y": 298
+            },
+            {
+              "x": 1727,
+              "y": 827
+            },
+            {
+              "x": 1659,
+              "y": 586
+            },
+            {
+              "x": 1659,
+              "y": 586
+            },
+            {
+              "x": 1659,
+              "y": 586
+            }
+          ],
+          "text": "",
+          "color": "#FF0000",
+          "thickness": 2,
+          "fontSize": 0
+        },
+        {
+          "type": "text",
+          "points": [
+            {
+              "x": 650,
+              "y": 357
+            }
+          ],
+          "text": "233333",
+          "color": "#FF0000",
+          "thickness": 2,
+          "fontSize": 24
+        },
+        {
+          "type": "text",
+          "points": [
+            {
+              "x": 357,
+              "y": 307
+            }
+          ],
+          "text": "232222222",
+          "color": "#FF0000",
+          "thickness": 2,
+          "fontSize": 24
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "id": "34343434",
+      "name": "34343434",
+      "rtspUrl": "rtsp://192.168.102.29:554/rtp/32010000001320000999_32010000001320000123?originTypeStr=rtp_push",
+      "roi": [],
+      "drawElements": null,
+      "enabled": true
+    }
+  ]
+}

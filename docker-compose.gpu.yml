@@ -9,7 +9,7 @@ services:
     container_name: firescrew_multistream_gpu
     restart: unless-stopped
     ports:
-      - "8081:8081"  # Web interface port
+      - "3099:3099"  # Web interface port
     volumes:
       # Mount config file (read-write for saving ROI changes)
       - ./config.json:/app/config.json:rw
@@ -38,7 +38,7 @@ services:
               capabilities: [gpu, compute, video]
     # Healthcheck
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/api/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:3099/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3
