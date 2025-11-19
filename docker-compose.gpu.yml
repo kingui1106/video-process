@@ -4,21 +4,23 @@ services:
   firescrew_multistream:
     build:
       context: .
-      dockerfile: docker/Dockerfile.multistream
-    container_name: firescrew_multistream
+      dockerfile: docker/Dockerfile.multistream.gpu
+    image: firescrew_multistream:gpu
+    container_name: firescrew_multistream_gpu
     restart: unless-stopped
     ports:
-      - "8081:8081"  # Web interface port (matches config.json webPort)
+      - "8081:8081"  # Web interface port
     volumes:
-      # Mount config file
+      # Mount config file (read-write for saving ROI changes)
       - ./config.json:/app/config.json:rw
-      # Optional: Mount media directory for recordings/snapshots
+      # Media directory for recordings/snapshots
       - ./media:/app/media:rw
-      # Optional: Mount assets directory
+      # Assets directory (fonts, templates)
       - ./assets:/app/assets:ro
     environment:
-      # Optional environment variables
+      # Timezone
       - TZ=Asia/Shanghai
+      # FFmpeg settings
       - FFMPEG_LOGLEVEL=warning
       # NVIDIA GPU support
       - NVIDIA_VISIBLE_DEVICES=all
@@ -26,21 +28,28 @@ services:
     networks:
       - firescrew_network
     # GPU support - requires nvidia-container-toolkit
-    # 移除资源限制以充分利用硬件性能
+    # RTX 4090 优化：移除 CPU/内存限制，充分利用硬件性能
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1  # 使用 1 个 GPU
+              count: 1  # 使用 1 个 GPU (RTX 4090)
               capabilities: [gpu, compute, video]
-    # Healthcheck to ensure service is running
+    # Healthcheck
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
 
 networks:
   firescrew_network:

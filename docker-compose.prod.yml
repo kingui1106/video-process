@@ -30,6 +30,9 @@ services:
       # Go runtime settings
       - GOMAXPROCS=${GOMAXPROCS:-0}
       - GOGC=${GOGC:-100}
+      # NVIDIA GPU support
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
     networks:
       - firescrew_network
     # Healthcheck
@@ -39,15 +42,19 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    # Resource limits
+    # Resource limits with GPU support
     deploy:
       resources:
         limits:
-          cpus: '${CPU_LIMIT:-2.0}'
-          memory: ${MEMORY_LIMIT:-2G}
+          cpus: '${CPU_LIMIT:-4.0}'
+          memory: ${MEMORY_LIMIT:-4G}
         reservations:
-          cpus: '${CPU_RESERVATION:-0.5}'
-          memory: ${MEMORY_RESERVATION:-512M}
+          cpus: '${CPU_RESERVATION:-1.0}'
+          memory: ${MEMORY_RESERVATION:-1G}
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}  # 使用的 GPU 数量
+              capabilities: [gpu, compute, video]
     # Logging configuration
     logging:
       driver: "json-file"

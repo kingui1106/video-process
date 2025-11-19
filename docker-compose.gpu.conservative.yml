@@ -1,46 +1,54 @@
 version: '3.8'
 
+# 保守配置版本 - 如果您想限制资源使用
+# 适用场景：服务器上还运行其他服务，需要预留资源
+
 services:
   firescrew_multistream:
     build:
       context: .
-      dockerfile: docker/Dockerfile.multistream
-    container_name: firescrew_multistream
+      dockerfile: docker/Dockerfile.multistream.gpu
+    image: firescrew_multistream:gpu
+    container_name: firescrew_multistream_gpu
     restart: unless-stopped
     ports:
-      - "8081:8081"  # Web interface port (matches config.json webPort)
+      - "8081:8081"
     volumes:
-      # Mount config file
       - ./config.json:/app/config.json:rw
-      # Optional: Mount media directory for recordings/snapshots
       - ./media:/app/media:rw
-      # Optional: Mount assets directory
       - ./assets:/app/assets:ro
     environment:
-      # Optional environment variables
       - TZ=Asia/Shanghai
       - FFMPEG_LOGLEVEL=warning
-      # NVIDIA GPU support
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     networks:
       - firescrew_network
-    # GPU support - requires nvidia-container-toolkit
-    # 移除资源限制以充分利用硬件性能
     deploy:
       resources:
+        limits:
+          # 软限制：允许突发使用更多资源
+          cpus: '12.0'     # 假设您有 16 核，预留 4 核给系统
+          memory: 16G      # 假设您有 32GB，预留 16GB
         reservations:
+          # 保证最小资源
+          cpus: '4.0'      # 保证至少 4 核
+          memory: 4G       # 保证至少 4GB
           devices:
             - driver: nvidia
-              count: 1  # 使用 1 个 GPU
+              count: 1
               capabilities: [gpu, compute, video]
-    # Healthcheck to ensure service is running
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   firescrew_network:

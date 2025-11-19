@@ -59,8 +59,9 @@ type Camera struct {
 
 // Config represents the application configuration
 type Config struct {
-	WebPort string   `json:"webPort"`
-	Cameras []Camera `json:"cameras"`
+	WebPort   string   `json:"webPort"`
+	Cameras   []Camera `json:"cameras"`
+	EnableGPU bool     `json:"enableGPU"` // Enable NVIDIA GPU hardware acceleration
 }
 
 // StreamInfo holds stream and viewer information
@@ -74,11 +75,12 @@ type StreamInfo struct {
 
 // StreamManager manages multiple camera streams
 type StreamManager struct {
-	config      *Config
-	configPath  string   // Path to the config file
-	streams     sync.Map // map[string]*StreamInfo
-	mu          sync.RWMutex
-	idleTimeout time.Duration // Time to wait before stopping stream when no viewers
+	config       *Config
+	configPath   string   // Path to the config file
+	streams      sync.Map // map[string]*StreamInfo
+	mu           sync.RWMutex
+	idleTimeout  time.Duration // Time to wait before stopping stream when no viewers
+	gpuAvailable bool          // Whether GPU hardware acceleration is available
 }
 
 // NewStreamManager creates a new stream manager
@@ -89,12 +91,51 @@ func NewStreamManager(configPath string) (*StreamManager, error) {
 	}
 
 	sm := &StreamManager{
-		config:      config,
-		configPath:  configPath,
-		idleTimeout: 30 * time.Second, // Stop stream after 30 seconds of no viewers
+		config:       config,
+		configPath:   configPath,
+		idleTimeout:  30 * time.Second, // Stop stream after 30 seconds of no viewers
+		gpuAvailable: false,
+	}
+
+	// Check GPU availability if enabled in config
+	if config.EnableGPU {
+		sm.gpuAvailable = sm.checkGPUAvailability()
+		if sm.gpuAvailable {
+			log.Printf("✓ NVIDIA GPU hardware acceleration enabled")
+		} else {
+			log.Printf("⚠ GPU acceleration requested but not available, falling back to CPU")
+		}
+	} else {
+		log.Printf("GPU acceleration disabled in config")
 	}
 
 	return sm, nil
+}
+
+// checkGPUAvailability checks if NVIDIA GPU is available for hardware acceleration
+func (sm *StreamManager) checkGPUAvailability() bool {
+	// Check if nvidia-smi is available
+	cmd := exec.Command("nvidia-smi", "-L")
+	if err := cmd.Run(); err != nil {
+		log.Printf("nvidia-smi not found or failed: %v", err)
+		return false
+	}
+
+	// Check if ffmpeg supports CUDA
+	cmd = exec.Command("ffmpeg", "-hwaccels")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to check ffmpeg hardware acceleration support: %v", err)
+		return false
+	}
+
+	// Check if "cuda" is in the list of hardware accelerators
+	if bytes.Contains(output, []byte("cuda")) {
+		return true
+	}
+
+	log.Printf("FFmpeg does not support CUDA hardware acceleration")
+	return false
 }
 
 // loadConfig loads configuration from file
@@ -301,19 +342,20 @@ func (sm *StreamManager) RemoveViewer(cameraID string) error {
 
 	log.Printf("Viewer removed from camera %s, remaining viewers: %d", cameraID, streamInfo.ViewerCount)
 
+	// 禁用自动停止功能 - 流将持续运行，避免内存泄漏
 	// If no viewers left, schedule stream stop
-	if streamInfo.ViewerCount == 0 {
-		// Cancel any existing timer
-		if streamInfo.StopTimer != nil {
-			streamInfo.StopTimer.Stop()
-		}
+	// if streamInfo.ViewerCount == 0 {
+	// 	// Cancel any existing timer
+	// 	if streamInfo.StopTimer != nil {
+	// 		streamInfo.StopTimer.Stop()
+	// 	}
 
-		// Schedule stream stop after idle timeout
-		streamInfo.StopTimer = time.AfterFunc(sm.idleTimeout, func() {
-			log.Printf("No viewers for %v, stopping stream for camera: %s", sm.idleTimeout, cameraID)
-			sm.StopStream(cameraID)
-		})
-	}
+	// 	// Schedule stream stop after idle timeout
+	// 	streamInfo.StopTimer = time.AfterFunc(sm.idleTimeout, func() {
+	// 		log.Printf("No viewers for %v, stopping stream for camera: %s", sm.idleTimeout, cameraID)
+	// 		sm.StopStream(cameraID)
+	// 	})
+	// }
 
 	return nil
 }
@@ -432,19 +474,43 @@ type FrameMsg struct {
 
 // processRTSPFeed processes RTSP feed using ffmpeg
 func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- FrameMsg) {
-	cmd := exec.Command(
-		"ffmpeg",
-		"-rtsp_transport", "tcp",
-		"-re",
-		"-i", rtspURL,
-		"-analyzeduration", "1000000",
-		"-probesize", "1000000",
-		"-vf", `select=not(mod(n\,5))`,
-		"-fps_mode", "vfr",
-		"-c:v", "png",
-		"-f", "image2pipe",
-		"-",
-	)
+	var args []string
+
+	// Build FFmpeg command based on GPU availability
+	if sm.gpuAvailable {
+		// GPU-accelerated pipeline
+		log.Printf("Using GPU acceleration for stream: %s", rtspURL)
+		args = []string{
+			"-hwaccel", "cuda",
+			"-hwaccel_output_format", "cuda",
+			"-rtsp_transport", "tcp",
+			"-re",
+			"-i", rtspURL,
+			"-analyzeduration", "1000000",
+			"-probesize", "1000000",
+			"-vf", "hwdownload,format=nv12,select=not(mod(n\\,5))",
+			"-fps_mode", "vfr",
+			"-c:v", "png",
+			"-f", "image2pipe",
+			"-",
+		}
+	} else {
+		// CPU pipeline (original)
+		args = []string{
+			"-rtsp_transport", "tcp",
+			"-re",
+			"-i", rtspURL,
+			"-analyzeduration", "1000000",
+			"-probesize", "1000000",
+			"-vf", `select=not(mod(n\,5))`,
+			"-fps_mode", "vfr",
+			"-c:v", "png",
+			"-f", "image2pipe",
+			"-",
+		}
+	}
+
+	cmd := exec.Command("ffmpeg", args...)
 
 	stderrBuffer := &bytes.Buffer{}
 	cmd.Stderr = stderrBuffer
