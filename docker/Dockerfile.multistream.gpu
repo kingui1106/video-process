@@ -34,7 +34,8 @@ FROM jrottenberg/ffmpeg:7.1-nvidia2404
 # 设置时区和环境变量
 ENV TZ=Asia/Shanghai \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+    NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+    LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/opt/ffmpeg/lib:${LD_LIBRARY_PATH}
 
 USER root
 
@@ -49,6 +50,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
+
+# 配置 NVIDIA 库路径（nvidia-docker2 会挂载这些路径）
+RUN echo "/usr/local/nvidia/lib" >> /etc/ld.so.conf.d/nvidia.conf && \
+    echo "/usr/local/nvidia/lib64" >> /etc/ld.so.conf.d/nvidia.conf
 
 # Verify FFmpeg CUDA support (already built-in)
 RUN echo "=== FFmpeg Version ===" && \
@@ -70,6 +75,10 @@ COPY --from=builder /build/firescrew_multistream /app/firescrew_multistream
 # Copy assets (fonts, etc.)
 COPY --from=builder /build/assets /app/assets
 
+# Copy GPU entrypoint script
+COPY docker/entrypoint-gpu.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 # Create media directory for recordings/snapshots
 RUN mkdir -p /app/media
 
@@ -82,5 +91,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Run the application
 # Config file should be mounted at /app/config.json
-ENTRYPOINT ["/app/firescrew_multistream"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/app/firescrew_multistream"]
 
