@@ -19,7 +19,20 @@
       "Bash(xxd:*)",
       "Bash(for cam in 21 23 24)",
       "Bash(do echo \"=== Camera $cam ===\")",
-      "Bash(timeout 5 curl:*)"
+      "Bash(timeout 5 curl:*)",
+      "Bash(go build -o firescrew_multistream.exe firescrew_multistream.go)",
+      "Bash(timeout 5 powershell -Command \"Start-Process -FilePath ''./firescrew_multistream.exe'' -WindowStyle Hidden; Start-Sleep 3; Invoke-RestMethod -Uri ''http://localhost:3099/api/camera/32010000001320000999_32010000001320000123'' -Method Get\")",
+      "Bash(timeout 5 powershell -Command \"Start-Process -FilePath ''./firescrew_multistream.exe'' -WindowStyle Hidden; Start-Sleep 3; Invoke-RestMethod -Uri ''http://localhost:3099/api/camera/45102700411117000020_45102700411317000021'' -Method Get\")",
+      "Bash(timeout 5 powershell -Command \"Start-Process -FilePath ''./firescrew_multistream.exe'' -WindowStyle Hidden; Start-Sleep 3; Write-Host ''测试存在的摄像头ID:'' -ForegroundColor Green; Invoke-RestMethod -Uri ''http://localhost:3099/api/camera/45102700411117000020_45102700411317000021'' -Method Get; Write-Host ''''; Write-Host ''测试不存在的摄像头ID:'' -ForegroundColor Red; Invoke-RestMethod -Uri ''http://localhost:3099/api/camera/nonexistent123'' -Method Get\")",
+      "Bash(Start-Sleep 1)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :3099)",
+      "Bash(taskkill /PID 90360 /F)",
+      "Bash(timeout 2 powershell -Command \"Start-Process -FilePath ''./firescrew_multistream.exe'' -WindowStyle Hidden; Start-Sleep 2; Invoke-RestMethod -Uri ''http://localhost:3099/api/camera/45102700411117000020_45102700411317000021'' -Method Get\")",
+      "Bash(xargs -r taskkill /F /PID)",
+      "Bash(cat config.json)",
+      "Bash(go build -o firescrew_test.exe firescrew_multistream.go)",
+      "Bash(timeout 3 powershell -Command \"Start-Process -FilePath ''./firescrew_test.exe'' -WindowStyle Hidden; Start-Sleep 2; curl -s http://localhost:3100/api/camera/45102700411117000020_45102700411317000021\")"
     ],
     "deny": [],
     "ask": []

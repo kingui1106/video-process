@@ -25,6 +25,7 @@ func (sm *StreamManager) SetupRoutes(mux *http.ServeMux) {
 	// API routes
 	mux.HandleFunc("/api/cameras", sm.handleGetCameras)
 	mux.HandleFunc("/api/cameras/", sm.handleCameraAPI)
+	mux.HandleFunc("/api/camera/", sm.handleGetCameraByID)
 	mux.HandleFunc("/api/status", sm.handleGetStatus)
 
 	// Stream routes
@@ -320,4 +321,31 @@ func (sm *StreamManager) handleGetStatus(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(statuses)
+}
+
+// handleGetCameraByID returns true or false indicating if a camera exists
+func (sm *StreamManager) handleGetCameraByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract camera ID from path: /api/camera/{id}
+	cameraID := strings.TrimPrefix(r.URL.Path, "/api/camera/")
+	if cameraID == "" {
+		http.Error(w, "Camera ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if camera exists
+	_, err := sm.GetCamera(cameraID)
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Return true if camera exists, false if not
+	if err == nil {
+		json.NewEncoder(w).Encode(map[string]bool{"exists": true})
+	} else {
+		json.NewEncoder(w).Encode(map[string]bool{"exists": false})
+	}
 }
