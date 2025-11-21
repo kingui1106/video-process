@@ -7,3 +7,4 @@ demoStream/demoConfig.json
 .DS_Store
 demoStream/rtspServer/rtspServer
 demoStream/sample.mp4
+config.json

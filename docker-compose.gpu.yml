@@ -25,7 +25,7 @@ services:
       - MKL_NUM_THREADS=4
       # NVIDIA GPU support
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     networks:
       - firescrew_network
     # GPU配置 - 需要宿主机安装nvidia-docker2

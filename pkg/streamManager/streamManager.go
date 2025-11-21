@@ -8,7 +8,6 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
-	"image/png"
 	"io"
 	"log"
 	"net/http"
@@ -77,12 +76,15 @@ type StreamInfo struct {
 
 // StreamManager manages multiple camera streams
 type StreamManager struct {
-	config       *Config
-	configPath   string   // Path to the config file
-	streams      sync.Map // map[string]*StreamInfo
-	mu           sync.RWMutex
-	idleTimeout  time.Duration // Time to wait before stopping stream when no viewers
-	gpuAvailable bool          // Whether GPU hardware acceleration is available
+	config          *Config
+	configPath      string   // Path to the config file
+	streams         sync.Map // map[string]*StreamInfo
+	mu              sync.RWMutex
+	idleTimeout     time.Duration // Time to wait before stopping stream when no viewers
+	gpuAvailable    bool          // Whether GPU hardware acceleration is available
+	gpuSessionCount int           // Current number of active GPU decode sessions
+	maxGPUSessions  int           // Maximum concurrent GPU decode sessions
+	gpuMu           sync.Mutex    // Mutex to protect GPU session count
 }
 
 // NewStreamManager creates a new stream manager
@@ -93,10 +95,12 @@ func NewStreamManager(configPath string) (*StreamManager, error) {
 	}
 
 	sm := &StreamManager{
-		config:       config,
-		configPath:   configPath,
-		idleTimeout:  30 * time.Second, // Stop stream after 30 seconds of no viewers
-		gpuAvailable: false,
+		config:          config,
+		configPath:      configPath,
+		idleTimeout:     30 * time.Second, // Stop stream after 30 seconds of no viewers
+		gpuAvailable:    false,
+		gpuSessionCount: 0,
+		maxGPUSessions:  8, // RTX 4090 supports 8-10 concurrent NVDEC sessions
 	}
 
 	// Check GPU availability if enabled in config
@@ -112,6 +116,33 @@ func NewStreamManager(configPath string) (*StreamManager, error) {
 	}
 
 	return sm, nil
+}
+
+// acquireGPUSession attempts to acquire a GPU decode session
+// Returns true if session was acquired, false if max sessions reached
+func (sm *StreamManager) acquireGPUSession() bool {
+	sm.gpuMu.Lock()
+	defer sm.gpuMu.Unlock()
+
+	if sm.gpuSessionCount >= sm.maxGPUSessions {
+		log.Printf("⚠ GPU sessions full (%d/%d), falling back to CPU", sm.gpuSessionCount, sm.maxGPUSessions)
+		return false
+	}
+
+	sm.gpuSessionCount++
+	log.Printf("✓ GPU session acquired (%d/%d)", sm.gpuSessionCount, sm.maxGPUSessions)
+	return true
+}
+
+// releaseGPUSession releases a GPU decode session
+func (sm *StreamManager) releaseGPUSession() {
+	sm.gpuMu.Lock()
+	defer sm.gpuMu.Unlock()
+
+	if sm.gpuSessionCount > 0 {
+		sm.gpuSessionCount--
+		log.Printf("GPU session released (%d/%d)", sm.gpuSessionCount, sm.maxGPUSessions)
+	}
 }
 
 // checkGPUAvailability checks if NVIDIA GPU is available for hardware acceleration
@@ -478,34 +509,122 @@ func isGPUError(errorMsg string) bool {
 	return false
 }
 
+// isFatalConnectionError checks if the error is a fatal connection error that should not be retried
+func isFatalConnectionError(errorMsg string) bool {
+	fatalErrorPatterns := []string{
+		"404 Not Found",
+		"Stream Not Found",
+		"401 Unauthorized",
+		"403 Forbidden",
+		"Invalid credentials",
+	}
+
+	for _, pattern := range fatalErrorPatterns {
+		if strings.Contains(errorMsg, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // processCamera processes video frames from a camera
 func (sm *StreamManager) processCamera(camera *Camera, stream *mjpeg.Stream) {
 	frameChannel := make(chan FrameMsg)
 	gpuErrorCount := 0
 	const maxGPUErrors = 3 // 连续3次GPU错误后回退
+	fatalErrorCount := 0
+	const maxFatalErrors = 3 // 连续3次致命错误后停止重试
+
+	// Try to acquire GPU session if GPU is available
+	useGPU := false
+	if sm.gpuAvailable {
+		useGPU = sm.acquireGPUSession()
+	}
+
+	// Ensure GPU session is released and stream is cleaned up when camera processing stops
+	defer func() {
+		if useGPU {
+			sm.releaseGPUSession()
+		}
+		// Remove stream from manager when stopping
+		sm.streams.Delete(camera.ID)
+		log.Printf("Stream processing stopped and cleaned up for camera: %s", camera.ID)
+	}()
+
+	// Channel to signal the feed goroutine to stop
+	stopFeed := make(chan bool)
+	feedStopped := make(chan bool)
 
 	go func() {
+		defer close(feedStopped)
 		for {
-			sm.processRTSPFeed(camera.RtspUrl, frameChannel)
-			time.Sleep(5 * time.Second)
-			log.Printf("Restarting RTSP feed for camera: %s", camera.ID)
+			select {
+			case <-stopFeed:
+				log.Printf("Stopping RTSP feed goroutine for camera: %s", camera.ID)
+				return
+			default:
+				sm.processRTSPFeed(camera.RtspUrl, frameChannel, useGPU)
+
+				// Check if we should stop before retrying
+				select {
+				case <-stopFeed:
+					return
+				case <-time.After(5 * time.Second):
+					log.Printf("Restarting RTSP feed for camera: %s", camera.ID)
+				}
+			}
 		}
 	}()
 
+	lastErrorWasExit := false // Track if the last error was an exit error
+
 	for msg := range frameChannel {
 		if msg.Error != "" {
-			log.Printf("Error from camera %s: %s", camera.ID, msg.Error)
+			// Only log non-exit errors and summaries to reduce noise
+			if !strings.Contains(msg.Error, "FFmpeg exited with error") {
+				log.Printf("Error from camera %s: %s", camera.ID, msg.Error)
+			}
+
+			// Track FFmpeg exit errors
+			isExitError := strings.Contains(msg.Error, "FFmpeg exited with error")
+			if isExitError {
+				lastErrorWasExit = true
+				continue // Wait for STDERR message
+			}
+
+			// 检测致命连接错误（404等），停止重试
+			isFatal := isFatalConnectionError(msg.Error)
+			if isFatal && lastErrorWasExit {
+				// This is a fatal error from STDERR following an exit error
+				fatalErrorCount++
+				lastErrorWasExit = false // Reset for next iteration
+				log.Printf("Fatal connection error #%d detected for camera %s", fatalErrorCount, camera.ID)
+
+				if fatalErrorCount >= maxFatalErrors {
+					log.Printf("⚠ Fatal connection error detected for camera %s after %d attempts", camera.ID, fatalErrorCount)
+					log.Printf("⚠ Stopping stream retry. Will restart on next viewer request.")
+					close(stopFeed)
+					<-feedStopped // Wait for feed goroutine to stop
+					return
+				}
+			} else {
+				// 只有在这不是GPU错误时才重置致命错误计数
+				if !isGPUError(msg.Error) && !isFatal {
+					fatalErrorCount = 0
+				}
+				lastErrorWasExit = false
+			}
 
 			// 检测GPU错误并自动回退到CPU模式
-			if sm.gpuAvailable && isGPUError(msg.Error) {
+			if useGPU && isGPUError(msg.Error) {
 				gpuErrorCount++
 				if gpuErrorCount >= maxGPUErrors {
 					log.Printf("⚠ GPU acceleration failed %d times for camera %s, falling back to CPU mode", gpuErrorCount, camera.ID)
-					log.Printf("⚠ GPU Error: libnvcuvid.so.1 not found. Please ensure:")
-					log.Printf("   1. NVIDIA driver >= 470.x is installed on host")
-					log.Printf("   2. nvidia-docker2 and nvidia-container-toolkit are installed")
-					log.Printf("   3. Docker is configured with NVIDIA runtime")
-					sm.gpuAvailable = false
+					log.Printf("⚠ GPU Error detected. Releasing GPU session and switching to CPU mode for this stream")
+
+					// Release GPU session and switch to CPU mode
+					sm.releaseGPUSession()
+					useGPU = false
 					gpuErrorCount = 0 // 重置计数器
 				}
 			} else {
@@ -514,8 +633,10 @@ func (sm *StreamManager) processCamera(camera *Camera, stream *mjpeg.Stream) {
 			continue
 		}
 
-		// 成功处理帧，重置错误计数
+		// 成功处理帧，重置所有错误计数
 		gpuErrorCount = 0
+		fatalErrorCount = 0
+		lastErrorWasExit = false
 
 		if msg.Frame != nil {
 			rgba, ok := msg.Frame.(*image.RGBA)
@@ -551,11 +672,11 @@ type FrameMsg struct {
 }
 
 // processRTSPFeed processes RTSP feed using ffmpeg
-func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- FrameMsg) {
+func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- FrameMsg, useGPU bool) {
 	var args []string
 
 	// Build FFmpeg command based on GPU availability
-	if sm.gpuAvailable {
+	if useGPU {
 		// GPU-accelerated pipeline
 		log.Printf("Using GPU acceleration for stream: %s", rtspURL)
 		args = []string{
@@ -566,23 +687,26 @@ func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- Frame
 			"-i", rtspURL,
 			"-analyzeduration", "1000000",
 			"-probesize", "1000000",
-			"-vf", "hwdownload,format=nv12,select=not(mod(n\\,5))",
+			"-vf", "scale_cuda=format=yuv420p,hwdownload,format=yuv420p,select=not(mod(n\\,5))",
+			"-pix_fmt", "rgb24",
 			"-fps_mode", "vfr",
-			"-c:v", "png",
+			"-c:v", "mjpeg",
+			"-q:v", "3", // JPEG quality (2-31, lower is better)
 			"-f", "image2pipe",
 			"-",
 		}
 	} else {
-		// CPU pipeline (original)
+		// CPU pipeline (optimized for 15+ cameras)
 		args = []string{
 			"-rtsp_transport", "tcp",
-			"-re",
 			"-i", rtspURL,
-			"-analyzeduration", "1000000",
-			"-probesize", "1000000",
-			"-vf", `select=not(mod(n\,5))`,
+			"-analyzeduration", "500000",     // 降低分析时间
+			"-probesize", "500000",           // 降低探测大小
+			"-threads", "2",                  // 限制每路解码线程数
+			"-vf", `select=not(mod(n\,10))`, // 每10帧取1帧（降低50%负载）
 			"-fps_mode", "vfr",
-			"-c:v", "png",
+			"-c:v", "mjpeg",
+			"-q:v", "5", // JPEG质量稍低但编码更快
 			"-f", "image2pipe",
 			"-",
 		}
@@ -608,8 +732,11 @@ func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- Frame
 
 	frameData := bytes.NewBuffer(nil)
 	isFrameStarted := false
+	jpegSOI := []byte{0xFF, 0xD8}       // JPEG Start of Image marker
+	jpegEOI := []byte{0xFF, 0xD9}       // JPEG End of Image marker
+	maxFrameSize := 10 * 1024 * 1024    // 10MB limit for a single frame
 
-	buffer := make([]byte, 8192)
+	buffer := make([]byte, 65536) // 64KB buffer
 	for {
 		n, err := pipe.Read(buffer)
 		if err == io.EOF {
@@ -619,16 +746,38 @@ func (sm *StreamManager) processRTSPFeed(rtspURL string, msgChannel chan<- Frame
 			return
 		}
 
-		frameData.Write(buffer[:n])
+		// Check if we have a JPEG header in the current read
+		data := buffer[:n]
+		headerIdx := bytes.Index(data, jpegSOI)
 
-		if bytes.HasPrefix(frameData.Bytes(), []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) {
+		if headerIdx >= 0 && isFrameStarted {
+			// Found a new frame header while processing a frame
+			// This means the previous frame is incomplete, discard it
+			frameData.Reset()
+			isFrameStarted = false
+		}
+
+		frameData.Write(data)
+
+		// Check for frame size limit
+		if frameData.Len() > maxFrameSize {
+			// Frame too large, likely corrupted, reset
+			frameData.Reset()
+			isFrameStarted = false
+			continue
+		}
+
+		if bytes.HasPrefix(frameData.Bytes(), jpegSOI) {
 			isFrameStarted = true
 		}
 
-		if isFrameStarted && bytes.HasSuffix(frameData.Bytes(), []byte{0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82}) {
-			img, err := png.Decode(bytes.NewReader(frameData.Bytes()))
+		if isFrameStarted && bytes.HasSuffix(frameData.Bytes(), jpegEOI) {
+			// Attempt to decode the frame
+			img, err := jpeg.Decode(bytes.NewReader(frameData.Bytes()))
 			if err != nil {
-				msgChannel <- FrameMsg{Error: "Failed to decode PNG: " + err.Error()}
+				// Silently skip corrupted frames instead of sending error
+				// This prevents one bad frame from disrupting the stream
+				log.Printf("Warning: Skipped corrupted JPEG frame: %v", err)
 			} else {
 				msgChannel <- FrameMsg{Frame: img}
 			}

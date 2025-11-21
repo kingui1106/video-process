@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose:*)",
+      "Bash(pkill:*)",
+      "Bash(kill:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker logs:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(curl:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker stats:*)",
+      "Bash(top:*)",
+      "Bash(for cam in 21 22 23 24)",
+      "Bash(do echo \"Testing camera $cam:\")",
+      "Bash(timeout 3 curl:*)",
+      "Bash(done)",
+      "Bash(timeout 10 curl:*)",
+      "Bash(xxd:*)",
+      "Bash(for cam in 21 23 24)",
+      "Bash(do echo \"=== Camera $cam ===\")",
+      "Bash(timeout 5 curl:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
